@@ -38,16 +38,32 @@ export default function Navbar({ currentUser, allUsers }: NavbarProps) {
 
         {/* User Stats & Persona Switcher */}
         <div className="flex items-center gap-4">
-          {/* Balance Widget */}
-          <div className="flex items-center gap-2 rounded-full bg-slate-900 border border-white/5 px-4 py-1.5 shadow-inner">
-            <Coins className="h-4.5 w-4.5 text-yellow-500 fill-yellow-500/20" />
-            <span className="font-mono text-sm font-bold text-slate-100">
-              {currentUser.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-            <span className="text-xs font-semibold text-slate-400">Tokens</span>
-          </div>
-
-          {/* Persona Switcher Dropdown */}
+          {/* Balance Widget & Faucet */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 rounded-full bg-slate-900 border border-white/5 px-4 py-1.5 shadow-inner">
+              <Coins className="h-4.5 w-4.5 text-yellow-500 fill-yellow-500/20" />
+              <span className="font-mono text-sm font-bold text-slate-100">
+                {currentUser.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <span className="text-xs font-semibold text-slate-400">Tokens</span>
+            </div>
+            
+            <button
+              onClick={async () => {
+                const { claimFaucetAction } = await import("@/app/actions");
+                const res = await claimFaucetAction(currentUser.id);
+                if (res.success) {
+                  window.location.reload();
+                } else {
+                  alert(res.error || "Faucet failed");
+                }
+              }}
+              title="Get +1,000 Tokens (Faucet)"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-600/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all cursor-pointer font-bold text-lg active:scale-95"
+            >
+              +
+            </button>
+          </div>          {/* Persona Switcher Dropdown */}
           <div className="relative">
             <button
               onClick={() => setShowDropdown(!showDropdown)}

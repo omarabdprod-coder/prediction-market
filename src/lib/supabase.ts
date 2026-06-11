@@ -237,6 +237,15 @@ export async function dbRpc<T = any>(
         return { data: user.id as any, error: null };
       }
 
+      case "faucet_tokens_rpc": {
+        const { p_user_id } = params;
+        const user = mockDb.users.get(p_user_id);
+        if (user) {
+          user.balance += 1000.00;
+        }
+        return { data: null, error: null };
+      }
+
       case "create_market_rpc": {
         const { p_question, p_description, p_resolution_date, p_creator_id } = params;
         const creator = mockDb.users.get(p_creator_id);

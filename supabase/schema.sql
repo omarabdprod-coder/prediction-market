@@ -604,3 +604,15 @@ begin
   return v_user_id;
 end;
 $$ language plpgsql security definer;
+
+-- Faucet Tokens RPC (sandbox printing)
+create or replace function public.faucet_tokens_rpc(
+  p_user_id uuid
+)
+returns void as $$
+begin
+  update public.users
+  set balance = balance + 1000.00
+  where id = p_user_id;
+end;
+$$ language plpgsql security definer;

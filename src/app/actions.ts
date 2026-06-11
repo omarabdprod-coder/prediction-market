@@ -202,6 +202,7 @@ export async function authenticateAction(username: string): Promise<ActionRespon
     return { success: false, error: e.message || "An unexpected error occurred" };
   }
 }
+
 /**
  * Log out the current user session.
  */
@@ -209,6 +210,24 @@ export async function logoutAction(): Promise<ActionResponse<void>> {
   try {
     const cookieStore = await cookies();
     cookieStore.delete("persona");
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message || "An unexpected error occurred" };
+  }
+}
+
+/**
+ * Grant 1,000 more tokens to the current user (faucet)
+ */
+export async function claimFaucetAction(userId: string): Promise<ActionResponse<void>> {
+  try {
+    const { error } = await dbRpc("faucet_tokens_rpc", {
+      p_user_id: userId,
+    });
+    if (error) {
+      return { success: false, error: error.message || String(error) };
+    }
+    revalidatePath("/");
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e.message || "An unexpected error occurred" };
