@@ -52,15 +52,43 @@ export default function CreateMarketModal({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      setFileError("File size exceeds 2MB. Choose a smaller image.");
+    // We can now support larger source files (up to 10MB) because we compress them client-side!
+    if (file.size > 10 * 1024 * 1024) {
+      setFileError("File size exceeds 10MB. Choose a smaller image.");
       return;
     }
 
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") {
-        setFileBase64(reader.result);
+        const img = new Image();
+        img.src = reader.result;
+        img.onload = () => {
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 450;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+            const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            // Compress to JPEG at 70% quality
+            const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
+            setFileBase64(compressedBase64);
+          } else {
+            setFileBase64(reader.result as string);
+          }
+        };
       }
     };
     reader.onerror = () => {
