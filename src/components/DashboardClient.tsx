@@ -528,12 +528,25 @@ export default function DashboardClient({
                       {/* Row 1: Header (User + Time) */}
                       <div className="flex justify-between items-center text-xs">
                         <div className="flex items-center gap-2">
-                          <img
-                            src={tx.user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${tx.user?.username}`}
-                            alt={tx.user?.username}
-                            className="h-5 w-5 rounded-full object-cover bg-slate-800"
-                          />
-                          <span className="font-bold text-slate-200">{tx.user?.username}</span>
+                          {tx.user_id === currentUser.id ? (
+                            <>
+                              <img
+                                src={tx.user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${tx.user?.username}`}
+                                alt="You"
+                                className="h-5 w-5 rounded-full object-cover bg-slate-800 border border-indigo-500/30"
+                              />
+                              <span className="font-bold text-indigo-400">You</span>
+                            </>
+                          ) : (
+                            <>
+                              <img
+                                src={`https://api.dicebear.com/7.x/identicon/svg?seed=${tx.id}`}
+                                alt="Anonymous Trader"
+                                className="h-5 w-5 rounded-full object-cover bg-slate-800 border border-white/10"
+                              />
+                              <span className="font-bold text-slate-400 italic font-sans">Anonymous Trader</span>
+                            </>
+                          )}
                         </div>
                         <span className="text-[10px] text-slate-500 font-mono">
                           {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

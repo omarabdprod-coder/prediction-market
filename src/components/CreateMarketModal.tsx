@@ -44,7 +44,7 @@ export default function CreateMarketModal({
   const [taggedUsers, setTaggedUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [durationPreset, setDurationPreset] = useState<"custom" | "15m" | "1h">("custom");
+  const [durationPreset, setDurationPreset] = useState<"custom" | "15m" | "1h" | "3h" | "6h">("custom");
 
   const formatLocalDate = (date: Date) => {
     const tzoffset = date.getTimezoneOffset() * 60000;
@@ -467,7 +467,7 @@ export default function CreateMarketModal({
             <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
               Market Duration Preset
             </label>
-            <div className="grid grid-cols-3 gap-2 bg-slate-950 p-1 rounded-xl border border-white/5">
+            <div className="grid grid-cols-5 gap-1 bg-slate-950 p-1 rounded-xl border border-white/5 text-[11px]">
               <button
                 type="button"
                 onClick={() => {
@@ -475,11 +475,12 @@ export default function CreateMarketModal({
                   setResolutionDate(formatLocalDate(future));
                   setDurationPreset("15m");
                 }}
-                className={`rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                className={`rounded-lg py-1 text-center font-bold transition-all cursor-pointer ${
                   durationPreset === "15m" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
+                title="15 Minutes"
               >
-                15 Mins (VC Session)
+                15m
               </button>
               <button
                 type="button"
@@ -488,22 +489,51 @@ export default function CreateMarketModal({
                   setResolutionDate(formatLocalDate(future));
                   setDurationPreset("1h");
                 }}
-                className={`rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                className={`rounded-lg py-1 text-center font-bold transition-all cursor-pointer ${
                   durationPreset === "1h" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
+                title="1 Hour"
               >
-                1 Hour (Quick)
+                1h
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const future = new Date(Date.now() + 3 * 60 * 60 * 1000);
+                  setResolutionDate(formatLocalDate(future));
+                  setDurationPreset("3h");
+                }}
+                className={`rounded-lg py-1 text-center font-bold transition-all cursor-pointer ${
+                  durationPreset === "3h" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="3 Hours"
+              >
+                3h
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const future = new Date(Date.now() + 6 * 60 * 60 * 1000);
+                  setResolutionDate(formatLocalDate(future));
+                  setDurationPreset("6h");
+                }}
+                className={`rounded-lg py-1 text-center font-bold transition-all cursor-pointer ${
+                  durationPreset === "6h" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="6 Hours"
+              >
+                6h
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setDurationPreset("custom");
                 }}
-                className={`rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                className={`rounded-lg py-1 text-center font-bold transition-all cursor-pointer ${
                   durationPreset === "custom" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Custom Select
+                Custom
               </button>
             </div>
           </div>
