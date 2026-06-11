@@ -9,7 +9,9 @@ import {
 } from "./amm";
 
 // Determine if we should use mock database
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrlRaw = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// Strip any trailing slashes to prevent PGRST125 double-slash errors in PostgREST queries
+const supabaseUrl = supabaseUrlRaw ? supabaseUrlRaw.replace(/\/+$/, "") : "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export const isMockMode = !supabaseUrl || !supabaseAnonKey || supabaseUrl.includes("your-supabase");
@@ -18,7 +20,7 @@ console.log(`[Prediction Market] Database mode: ${isMockMode ? "MOCK (In-Memory)
 
 // Real Supabase client instance (if configuration is present)
 export const supabase = !isMockMode
-  ? createClient(supabaseUrl!, supabaseAnonKey!)
+  ? createClient(supabaseUrl, supabaseAnonKey!)
   : null;
 
 // ==========================================
