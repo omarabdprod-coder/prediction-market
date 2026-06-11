@@ -177,8 +177,17 @@ export default function DashboardClient({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {sortedMarkets.map((market) => {
-                const yesPercent = Math.round((market.yesPrice || 0.5) * 100);
-                const noPercent = 100 - yesPercent;
+                const outcomes = market.outcomes || ["YES", "NO"];
+                const prices = market.prices || outcomes.map(() => 0.5);
+                const isBinary = outcomes.length === 2 && outcomes[0] === "YES" && outcomes[1] === "NO";
+
+                const yesPercent = isBinary ? Math.round((prices[0] || 0.5) * 100) : 50;
+                const noPercent = isBinary ? 100 - yesPercent : 50;
+
+                const sortedOptions = outcomes.map((name, idx) => ({
+                  name,
+                  percent: Math.round((prices[idx] || 0.0) * 100)
+                })).sort((a, b) => b.percent - a.percent);
 
                  return (
                   <div
@@ -218,31 +227,55 @@ export default function DashboardClient({
                       </div>
 
                       {/* Progress representation */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
-                          <span className="flex items-center gap-1.5 text-emerald-400">
-                            YES <span className="font-mono text-sm font-bold">{yesPercent}%</span>
-                          </span>
-                          <span className="flex items-center gap-1.5 text-red-400">
-                            NO <span className="font-mono text-sm font-bold">{noPercent}%</span>
-                          </span>
+                      {isBinary ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
+                            <span className="flex items-center gap-1.5 text-emerald-400">
+                              YES <span className="font-mono text-sm font-bold">{yesPercent}%</span>
+                            </span>
+                            <span className="flex items-center gap-1.5 text-red-400">
+                              NO <span className="font-mono text-sm font-bold">{noPercent}%</span>
+                            </span>
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-950 flex border border-white/5">
+                            <div
+                              style={{ width: `${yesPercent}%` }}
+                              className="h-full bg-emerald-500 transition-all duration-500"
+                            />
+                            <div
+                              style={{ width: `${noPercent}%` }}
+                              className="h-full bg-red-500 transition-all duration-500"
+                            />
+                          </div>
                         </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-950 flex border border-white/5">
-                          <div
-                            style={{ width: `${yesPercent}%` }}
-                            className="h-full bg-emerald-500 transition-all duration-500"
-                          />
-                          <div
-                            style={{ width: `${noPercent}%` }}
-                            className="h-full bg-red-500 transition-all duration-500"
-                          />
+                      ) : (
+                        <div className="space-y-2.5">
+                          {sortedOptions.slice(0, 3).map((opt) => (
+                            <div key={opt.name} className="space-y-1">
+                              <div className="flex justify-between text-[11px] font-medium text-slate-400">
+                                <span className="truncate max-w-[170px] text-slate-300 font-semibold">{opt.name}</span>
+                                <span className="font-mono text-xs font-bold text-indigo-400">{opt.percent}%</span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-slate-950 overflow-hidden border border-white/5">
+                                <div
+                                  style={{ width: `${opt.percent}%` }}
+                                  className="h-full bg-indigo-600 rounded-full transition-all duration-500"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                          {outcomes.length > 3 && (
+                            <div className="text-[10px] text-slate-500 text-right font-medium italic">
+                              + {outcomes.length - 3} other outcome{outcomes.length - 3 !== 1 ? "s" : ""}
+                            </div>
+                          )}
                         </div>
-                      </div>
+                      )}
 
                       {/* Footer */}
                       <div className="flex items-center justify-between border-t border-white/5 pt-4">
                         <span className="text-[10px] text-slate-500">
-                          Initial pool 50 Tokens
+                          LMSR liquidity pool
                         </span>
                         <Link
                           href={`/market/${market.id}`}

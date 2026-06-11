@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { createMarketAction } from "@/app/actions";
-import { Calendar, AlertCircle, X, HelpCircle, ArrowRight, Image as ImageIcon, Users } from "lucide-react";
+import { Calendar, AlertCircle, X, HelpCircle, ArrowRight, Image as ImageIcon, Users, ListPlus, Trash2 } from "lucide-react";
 
 interface CreateMarketModalProps {
   isOpen: boolean;
@@ -34,6 +34,8 @@ export default function CreateMarketModal({
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
   const [resolutionDate, setResolutionDate] = useState("");
+  const [outcomeType, setOutcomeType] = useState<"binary" | "multi">("binary");
+  const [options, setOptions] = useState<string[]>(["Option 1", "Option 2", "Option 3"]);
   const [imageOption, setImageOption] = useState<"preset" | "custom" | "file">("preset");
   const [selectedPresetUrl, setSelectedPresetUrl] = useState(PRESET_IMAGES[0].url);
   const [customImageUrl, setCustomImageUrl] = useState("");
@@ -75,10 +77,40 @@ export default function CreateMarketModal({
     }
   };
 
+  const handleAddOption = () => {
+    if (options.length >= 10) return;
+    setOptions([...options, `Option ${options.length + 1}`]);
+  };
+
+  const handleRemoveOption = (index: number) => {
+    if (options.length <= 2) return;
+    setOptions(options.filter((_, idx) => idx !== index));
+  };
+
+  const handleOptionChange = (index: number, val: string) => {
+    const updated = [...options];
+    updated[index] = val;
+    setOptions(updated);
+  };
+
+  // Cost and Outcomes list
+  const activeOutcomes = outcomeType === "binary" 
+    ? ["YES", "NO"] 
+    : options.map(o => o.trim()).filter(o => o !== "");
+
+  const bValue = 100.00; // LMSR Liquidity factor
+  const requiredLiquidity = bValue * Math.log(Math.max(2, activeOutcomes.length));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (userBalance < 50) {
-      setError("Insufficient balance. You need at least 50 tokens to create a market.");
+
+    if (outcomeType === "multi" && activeOutcomes.length < 2) {
+      setError("Please provide at least 2 non-empty options for multiple outcomes.");
+      return;
+    }
+
+    if (userBalance < requiredLiquidity) {
+      setError(`Insufficient balance. You need at least ${requiredLiquidity.toFixed(0)} tokens to subsidize this market.`);
       return;
     }
 
@@ -98,7 +130,9 @@ export default function CreateMarketModal({
       resolutionDate,
       creatorId,
       imageUrl || undefined,
-      taggedUsers
+      taggedUsers,
+      activeOutcomes,
+      bValue
     );
 
     setLoading(false);
@@ -108,6 +142,8 @@ export default function CreateMarketModal({
       setQuestion("");
       setDescription("");
       setResolutionDate("");
+      setOutcomeType("binary");
+      setOptions(["Option 1", "Option 2", "Option 3"]);
       setImageOption("preset");
       setSelectedPresetUrl(PRESET_IMAGES[0].url);
       setCustomImageUrl("");
@@ -189,6 +225,74 @@ export default function CreateMarketModal({
               onChange={(e) => setDescription(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all resize-none"
             />
+          </div>
+
+          {/* Outcome Type & Settings */}
+          <div className="space-y-3">
+            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <ListPlus className="h-3.5 w-3.5 text-indigo-400" />
+              Outcome Format
+            </label>
+            
+            <div className="flex gap-2 rounded-xl bg-slate-950 p-1 border border-white/5">
+              <button
+                type="button"
+                onClick={() => setOutcomeType("binary")}
+                className={`flex-1 rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                  outcomeType === "binary" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Binary (YES / NO)
+              </button>
+              <button
+                type="button"
+                onClick={() => setOutcomeType("multi")}
+                className={`flex-1 rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                  outcomeType === "multi" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Multiple Outcomes
+              </button>
+            </div>
+
+            {/* Custom Multi-Outcome Rows */}
+            {outcomeType === "multi" && (
+              <div className="space-y-2.5 rounded-xl border border-white/5 bg-slate-950/20 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Outcomes Options</span>
+                  <button
+                    type="button"
+                    onClick={handleAddOption}
+                    disabled={options.length >= 10}
+                    className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 cursor-pointer disabled:opacity-50"
+                  >
+                    + Add Option
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {options.map((opt, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        required
+                        placeholder={`Option ${idx + 1}`}
+                        value={opt}
+                        onChange={(e) => handleOptionChange(idx, e.target.value)}
+                        className="flex-1 rounded-lg border border-white/5 bg-slate-950 px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:border-indigo-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveOption(idx)}
+                        disabled={options.length <= 2}
+                        className="rounded-lg p-1.5 text-slate-500 hover:text-red-400 disabled:opacity-30 disabled:hover:text-slate-500 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Market Image Field */}
@@ -277,7 +381,6 @@ export default function CreateMarketModal({
                   alt="Market Cover Preview"
                   className="h-full w-full object-cover opacity-70"
                   onError={(e) => {
-                    // Fallback on error
                     (e.target as HTMLElement).style.display = "none";
                   }}
                 />
@@ -338,11 +441,11 @@ export default function CreateMarketModal({
           <div className="rounded-xl border border-yellow-500/10 bg-yellow-500/5 p-4 space-y-1">
             <div className="flex items-center gap-2 text-yellow-500 text-xs font-bold uppercase tracking-wider">
               <AlertCircle className="h-4 w-4" />
-              Liquidity Requirement
+              Liquidity Subsidy Requirement
             </div>
             <p className="text-slate-300 text-xs leading-relaxed">
-              Creating a market requires injecting an initial <strong>50 Tokens</strong>. 
-              This collateral sets up the AMM pool at a 50/50 probability (50 YES shares / 50 NO shares).
+              Creating a market requires injecting an initial liquidity subsidy of <strong>{requiredLiquidity.toFixed(1)} Tokens</strong> (LMSR $b = 100$). 
+              This is locked in the contract to back initial wagers, and any remaining surplus is refunded to you upon market resolution.
             </p>
           </div>
 
@@ -361,10 +464,10 @@ export default function CreateMarketModal({
               </button>
               <button
                 type="submit"
-                disabled={loading || userBalance < 50}
+                disabled={loading || userBalance < requiredLiquidity}
                 className="glow-btn-purple flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
               >
-                {loading ? "Creating..." : "Confirm & Deposit 50 T"}
+                {loading ? "Creating..." : `Confirm & Deposit ${requiredLiquidity.toFixed(0)} T`}
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>

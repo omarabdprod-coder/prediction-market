@@ -1,11 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import {
-  calculateBuyYes,
-  calculateBuyNo,
-  calculateSellYes,
-  calculateSellNo,
-  getYesPrice,
-  getNoPrice,
+  lmsrCost,
+  lmsrPrices,
+  calculateBuyLmsr,
+  calculateSellLmsr,
 } from "./amm";
 
 // Determine if we should use mock database
@@ -43,19 +41,18 @@ export interface Market {
   resolution_date: string;
   creator_id: string;
   status: "active" | "resolved";
-  outcome: "YES" | "NO" | null;
+  outcome: string | null;
   image_url?: string;
   tagged_users?: string[];
+  outcomes: string[]; // Outcomes options list
   created_at: string;
-  yesPrice?: number; // UI helper
-  noPrice?: number;  // UI helper
+  prices?: number[];  // UI helper: Current probability prices (0 to 1) for each option
 }
 
 export interface LiquidityPool {
   market_id: string;
-  yes_shares: number;
-  no_shares: number;
-  k: number;
+  shares: number[]; // Outstanding shares vector
+  b: number;        // LMSR liquidity parameter
   updated_at: string;
 }
 
@@ -63,8 +60,7 @@ export interface UserPosition {
   id: string;
   user_id: string;
   market_id: string;
-  yes_shares: number;
-  no_shares: number;
+  shares: number[]; // Shares owned for each outcome index
   created_at: string;
 }
 
@@ -72,7 +68,8 @@ export interface Transaction {
   id: string;
   user_id: string;
   market_id: string;
-  type: "buy_yes" | "buy_no" | "sell_yes" | "sell_no" | "resolve_claim" | "create_market";
+  outcome_index?: number;
+  type: "buy" | "sell" | "resolve_claim" | "create_market";
   amount_tokens: number;
   amount_shares: number;
   fee_tokens: number;
@@ -92,9 +89,10 @@ class MockDatabase {
   }
 
   seed() {
-    // Seed standard test users (Discord avatars simulated with ui-avatars)
+    // Seed standard test users (including admin/MarketMaker)
     const seedUsers = [
       { id: "user-discord-admin", username: "Discord Admin 👑", balance: 5000.00, avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=admin", password: "password" },
+      { id: "user-marketmaker", username: "MarketMaker", balance: 10000.00, avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=marketmaker", password: "password" },
       { id: "user-alice", username: "Alice_Trader 📈", balance: 1000.00, avatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Alice", password: "password" },
       { id: "user-bob", username: "Bob_HODLer 📉", balance: 1000.00, avatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Bob", password: "password" },
       { id: "user-charlie", username: "Charlie_Whale 🐳", balance: 1500.00, avatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Charlie", password: "password" },
@@ -111,10 +109,10 @@ class MockDatabase {
       });
     });
 
-    // Seed some mock markets
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 7);
 
+    // Seed binary YES/NO markets
     const m1Id = "market-btc-100k";
     this.markets.set(m1Id, {
       id: m1Id,
@@ -124,51 +122,52 @@ class MockDatabase {
       creator_id: "user-discord-admin",
       status: "active",
       outcome: null,
+      outcomes: ["YES", "NO"],
       created_at: new Date().toISOString()
     });
     this.liquidityPools.set(m1Id, {
       market_id: m1Id,
-      yes_shares: 65.0000,
-      no_shares: 35.0000,
-      k: 65.0000 * 35.0000,
+      shares: [0.0000, 0.0000],
+      b: 200.00,
       updated_at: new Date().toISOString()
     });
 
     const m2Id = "market-eth-upgrade";
     this.markets.set(m2Id, {
       id: m2Id,
-      question: "Will the Ethereum Dencun upgrade deploy on mainnet on schedule?",
+      question: "Will the Ethereum Dencun upgrade deploy on schedule?",
       description: "Based on official EF announcements and slot completion timestamp.",
       resolution_date: futureDate.toISOString(),
       creator_id: "user-alice",
       status: "active",
       outcome: null,
+      outcomes: ["YES", "NO"],
       created_at: new Date().toISOString()
     });
     this.liquidityPools.set(m2Id, {
       market_id: m2Id,
-      yes_shares: 50.0000,
-      no_shares: 50.0000,
-      k: 2500.0000,
+      shares: [0.0000, 0.0000],
+      b: 200.00,
       updated_at: new Date().toISOString()
     });
 
-    const m3Id = "market-gpt5-release";
+    // Seed Multi-Outcome market
+    const m3Id = "market-rare-join";
     this.markets.set(m3Id, {
       id: m3Id,
-      question: "Will OpenAI announce GPT-5 by Friday evening?",
-      description: "Must be a formal public press release or blog post announcement from OpenAI.",
-      resolution_date: new Date(Date.now() + 86400000).toISOString(),
-      creator_id: "user-bob",
+      question: "Which guest joins the voice channel this weekend?",
+      description: "Resolves to the name of the first guest who speaks in TTSOPP voice channel, or None if no guests join.",
+      resolution_date: new Date(Date.now() + 86400000 * 2).toISOString(),
+      creator_id: "user-marketmaker",
       status: "active",
       outcome: null,
+      outcomes: ["Adi", "Omar H", "Lorenzo", "None"],
       created_at: new Date().toISOString()
     });
     this.liquidityPools.set(m3Id, {
       market_id: m3Id,
-      yes_shares: 30.0000,
-      no_shares: 70.0000,
-      k: 2100.0000,
+      shares: [0.0000, 0.0000, 0.0000, 0.0000],
+      b: 200.00,
       updated_at: new Date().toISOString()
     });
   }
@@ -178,25 +177,28 @@ class MockDatabase {
 const mockDb = new MockDatabase();
 
 // Helper to simulate current logged in user from cookies / session headers
-// In a real app, this parses Supabase auth header. In mock mode, we use a simple header override.
-export function getSessionUser(request?: Request): UserProfile {
-  let userId = "user-alice"; // Default persona
-
-  if (request) {
-    const url = new URL(request.url);
-    const persona = url.searchParams.get("persona") || request.headers.get("x-user-persona");
-    if (persona && mockDb.users.has(persona)) {
-      userId = persona;
-    }
+export async function getCurrentUser(): Promise<UserProfile | null> {
+  const cookieStore = await (await import("next/headers")).cookies();
+  const persona = cookieStore.get("persona")?.value;
+  if (persona && mockDb.users.has(persona)) {
+    return mockDb.users.get(persona)!;
   }
-
-  // Fallback to Alice if user not found
-  return mockDb.users.get(userId) || Array.from(mockDb.users.values())[0];
+  // Fallback to first user in list if no active cookie
+  return Array.from(mockDb.users.values())[0];
 }
 
-// ==========================================
-// UNIFIED DATABASE ACTION RUNNER (dbRpc)
-// ==========================================
+export async function fetchUser(userId: string): Promise<UserProfile | null> {
+  if (!isMockMode && supabase) {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .single();
+    if (error) return null;
+    return data;
+  }
+  return mockDb.users.get(userId) || null;
+}
 
 export async function dbRpc<T = any>(
   fnName: string,
@@ -249,15 +251,31 @@ export async function dbRpc<T = any>(
       }
 
       case "create_market_rpc": {
-        const { p_question, p_description, p_resolution_date, p_creator_id, p_image_url, p_tagged_users } = params;
+        const {
+          p_question,
+          p_description,
+          p_resolution_date,
+          p_creator_id,
+          p_image_url,
+          p_tagged_users,
+          p_outcomes,
+          p_b
+        } = params;
+
+        const outcomesList: string[] = p_outcomes || ["YES", "NO"];
+        const bVal = Number(p_b || 200.00);
+
         const creator = mockDb.users.get(p_creator_id);
         if (!creator) throw new Error("Creator user profile not found");
-        if (creator.balance < 50.00) {
-          throw new Error("Insufficient balance to inject initial liquidity (50 Tokens required)");
+
+        // Subsidy = b * ln(N)
+        const subsidy = bVal * Math.log(outcomesList.length);
+        if (creator.balance < subsidy) {
+          throw new Error(`Insufficient balance to inject initial liquidity (${subsidy.toFixed(2)} Tokens required)`);
         }
 
         // Deduct balance
-        creator.balance -= 50.00;
+        creator.balance -= subsidy;
 
         const newMarketId = `market-${Math.random().toString(36).substring(2, 11)}`;
         
@@ -269,16 +287,19 @@ export async function dbRpc<T = any>(
           creator_id: p_creator_id,
           status: "active",
           outcome: null,
+          outcomes: outcomesList,
           image_url: p_image_url,
           tagged_users: p_tagged_users,
           created_at: new Date().toISOString()
         });
 
+        // Initialize shares vector to zeros
+        const initialShares = outcomesList.map(() => 0.0);
+
         mockDb.liquidityPools.set(newMarketId, {
           market_id: newMarketId,
-          yes_shares: 50.0000,
-          no_shares: 50.0000,
-          k: 2500.0000,
+          shares: initialShares,
+          b: bVal,
           updated_at: new Date().toISOString()
         });
 
@@ -287,8 +308,8 @@ export async function dbRpc<T = any>(
           user_id: p_creator_id,
           market_id: newMarketId,
           type: "create_market",
-          amount_tokens: 50.00,
-          amount_shares: 50.0000,
+          amount_tokens: subsidy,
+          amount_shares: 0,
           fee_tokens: 0,
           created_at: new Date().toISOString()
         });
@@ -296,8 +317,8 @@ export async function dbRpc<T = any>(
         return { data: newMarketId as any, error: null };
       }
 
-      case "place_bet_yes_rpc": {
-        const { p_user_id, p_market_id, p_wager } = params;
+      case "place_bet_rpc": {
+        const { p_user_id, p_market_id, p_outcome_index, p_wager } = params;
         const user = mockDb.users.get(p_user_id);
         const pool = mockDb.liquidityPools.get(p_market_id);
         const market = mockDb.markets.get(p_market_id);
@@ -307,7 +328,10 @@ export async function dbRpc<T = any>(
         if (market.status !== "active") throw new Error("Market is not active");
         if (user.balance < p_wager) throw new Error("Insufficient balance");
 
-        const trade = calculateBuyYes(Number(p_wager), Number(pool.yes_shares), Number(pool.no_shares));
+        const outcomeIdx = Number(p_outcome_index);
+
+        // Perform LMSR calculation
+        const trade = calculateBuyLmsr(Number(p_wager), pool.shares, outcomeIdx, pool.b);
 
         // Deduct wager
         user.balance -= Number(p_wager);
@@ -317,8 +341,7 @@ export async function dbRpc<T = any>(
         if (creator) creator.balance += trade.fee;
 
         // Update pool
-        pool.yes_shares = trade.newPoolYes;
-        pool.no_shares = trade.newPoolNo;
+        pool.shares = trade.newQ;
         pool.updated_at = new Date().toISOString();
 
         // Update user position
@@ -329,19 +352,24 @@ export async function dbRpc<T = any>(
             id: `pos-${Math.random().toString(36).substring(2, 11)}`,
             user_id: p_user_id,
             market_id: p_market_id,
-            yes_shares: 0,
-            no_shares: 0,
+            shares: market.outcomes.map(() => 0.0),
             created_at: new Date().toISOString()
           };
           mockDb.userPositions.set(posKey, pos);
         }
-        pos.yes_shares += trade.shares;
+        
+        // Ensure size compatibility
+        while (pos.shares.length < market.outcomes.length) {
+          pos.shares.push(0.0);
+        }
+        pos.shares[outcomeIdx] += trade.shares;
 
         mockDb.transactions.push({
           id: `tx-${Math.random().toString(36).substring(2, 11)}`,
           user_id: p_user_id,
           market_id: p_market_id,
-          type: "buy_yes",
+          outcome_index: outcomeIdx,
+          type: "buy",
           amount_tokens: Number(p_wager),
           amount_shares: trade.shares,
           fee_tokens: trade.fee,
@@ -351,140 +379,45 @@ export async function dbRpc<T = any>(
         return { data: trade.shares as any, error: null };
       }
 
-      case "place_bet_no_rpc": {
-        const { p_user_id, p_market_id, p_wager } = params;
+      case "sell_bet_rpc": {
+        const { p_user_id, p_market_id, p_outcome_index, p_shares } = params;
         const user = mockDb.users.get(p_user_id);
         const pool = mockDb.liquidityPools.get(p_market_id);
         const market = mockDb.markets.get(p_market_id);
+        const posKey = `${p_user_id}:${p_market_id}`;
+        const pos = mockDb.userPositions.get(posKey);
 
         if (!user) throw new Error("User profile not found");
         if (!pool || !market) throw new Error("Market or liquidity pool not found");
         if (market.status !== "active") throw new Error("Market is not active");
-        if (user.balance < p_wager) throw new Error("Insufficient balance");
+        
+        const outcomeIdx = Number(p_outcome_index);
+        if (!pos || pos.shares[outcomeIdx] < Number(p_shares)) {
+          throw new Error("Insufficient shares in user position");
+        }
 
-        const trade = calculateBuyNo(Number(p_wager), Number(pool.yes_shares), Number(pool.no_shares));
-
-        // Deduct wager
-        user.balance -= Number(p_wager);
-
-        // Add fee to creator
-        const creator = mockDb.users.get(market.creator_id);
-        if (creator) creator.balance += trade.fee;
-
-        // Update pool
-        pool.yes_shares = trade.newPoolYes;
-        pool.no_shares = trade.newPoolNo;
-        pool.updated_at = new Date().toISOString();
+        const trade = calculateSellLmsr(Number(p_shares), pool.shares, outcomeIdx, pool.b);
 
         // Update user position
-        const posKey = `${p_user_id}:${p_market_id}`;
-        let pos = mockDb.userPositions.get(posKey);
-        if (!pos) {
-          pos = {
-            id: `pos-${Math.random().toString(36).substring(2, 11)}`,
-            user_id: p_user_id,
-            market_id: p_market_id,
-            yes_shares: 0,
-            no_shares: 0,
-            created_at: new Date().toISOString()
-          };
-          mockDb.userPositions.set(posKey, pos);
-        }
-        pos.no_shares += trade.shares;
+        pos.shares[outcomeIdx] -= Number(p_shares);
 
-        mockDb.transactions.push({
-          id: `tx-${Math.random().toString(36).substring(2, 11)}`,
-          user_id: p_user_id,
-          market_id: p_market_id,
-          type: "buy_no",
-          amount_tokens: Number(p_wager),
-          amount_shares: trade.shares,
-          fee_tokens: trade.fee,
-          created_at: new Date().toISOString()
-        });
-
-        return { data: trade.shares as any, error: null };
-      }
-
-      case "sell_bet_yes_rpc": {
-        const { p_user_id, p_market_id, p_shares } = params;
-        const user = mockDb.users.get(p_user_id);
-        const pool = mockDb.liquidityPools.get(p_market_id);
-        const market = mockDb.markets.get(p_market_id);
-        const posKey = `${p_user_id}:${p_market_id}`;
-        const pos = mockDb.userPositions.get(posKey);
-
-        if (!user) throw new Error("User profile not found");
-        if (!pool || !market) throw new Error("Market or liquidity pool not found");
-        if (market.status !== "active") throw new Error("Market is not active");
-        if (!pos || pos.yes_shares < Number(p_shares)) throw new Error("Insufficient YES shares to sell");
-
-        const trade = calculateSellYes(Number(p_shares), Number(pool.yes_shares), Number(pool.no_shares));
-
-        // Deduct user shares
-        pos.yes_shares -= Number(p_shares);
-
-        // Add net tokens to user
+        // Credit tokens
         user.balance += trade.tokens;
 
-        // Add fee to creator
+        // Pay fee to creator
         const creator = mockDb.users.get(market.creator_id);
         if (creator) creator.balance += trade.fee;
 
         // Update pool
-        pool.yes_shares = trade.newPoolYes;
-        pool.no_shares = trade.newPoolNo;
+        pool.shares = trade.newQ;
         pool.updated_at = new Date().toISOString();
 
         mockDb.transactions.push({
           id: `tx-${Math.random().toString(36).substring(2, 11)}`,
           user_id: p_user_id,
           market_id: p_market_id,
-          type: "sell_yes",
-          amount_tokens: trade.tokens,
-          amount_shares: Number(p_shares),
-          fee_tokens: trade.fee,
-          created_at: new Date().toISOString()
-        });
-
-        return { data: trade.tokens as any, error: null };
-      }
-
-      case "sell_bet_no_rpc": {
-        const { p_user_id, p_market_id, p_shares } = params;
-        const user = mockDb.users.get(p_user_id);
-        const pool = mockDb.liquidityPools.get(p_market_id);
-        const market = mockDb.markets.get(p_market_id);
-        const posKey = `${p_user_id}:${p_market_id}`;
-        const pos = mockDb.userPositions.get(posKey);
-
-        if (!user) throw new Error("User profile not found");
-        if (!pool || !market) throw new Error("Market or liquidity pool not found");
-        if (market.status !== "active") throw new Error("Market is not active");
-        if (!pos || pos.no_shares < Number(p_shares)) throw new Error("Insufficient NO shares to sell");
-
-        const trade = calculateSellNo(Number(p_shares), Number(pool.yes_shares), Number(pool.no_shares));
-
-        // Deduct user shares
-        pos.no_shares -= Number(p_shares);
-
-        // Add net tokens to user
-        user.balance += trade.tokens;
-
-        // Add fee to creator
-        const creator = mockDb.users.get(market.creator_id);
-        if (creator) creator.balance += trade.fee;
-
-        // Update pool
-        pool.yes_shares = trade.newPoolYes;
-        pool.no_shares = trade.newPoolNo;
-        pool.updated_at = new Date().toISOString();
-
-        mockDb.transactions.push({
-          id: `tx-${Math.random().toString(36).substring(2, 11)}`,
-          user_id: p_user_id,
-          market_id: p_market_id,
-          type: "sell_no",
+          outcome_index: outcomeIdx,
+          type: "sell",
           amount_tokens: trade.tokens,
           amount_shares: Number(p_shares),
           fee_tokens: trade.fee,
@@ -508,7 +441,13 @@ export async function dbRpc<T = any>(
           (adminUser && adminUser.username.toLowerCase() === "marketmaker");
         if (!isAuthorized) throw new Error("Only the market creator or MarketMaker can resolve this market");
 
-        const refund = p_outcome === "YES" ? pool.yes_shares : pool.no_shares;
+        const outcomeIdx = market.outcomes.findIndex(opt => opt.toLowerCase() === p_outcome.toLowerCase());
+        if (outcomeIdx === -1) throw new Error("Winning outcome must match one of the market options");
+
+        // Creator refund is C(q) - q_win
+        const finalCost = lmsrCost(pool.shares, pool.b);
+        const qWin = pool.shares[outcomeIdx];
+        const refund = finalCost - qWin;
 
         // Resolve market
         market.status = "resolved";
@@ -516,24 +455,24 @@ export async function dbRpc<T = any>(
 
         // Refund creator
         const creator = mockDb.users.get(market.creator_id);
-        if (creator) creator.balance += refund;
+        if (creator && refund > 0) creator.balance += refund;
 
         // Drain pool
-        pool.yes_shares = 0.0001;
-        pool.no_shares = 0.0001;
-        pool.k = 0.00000001;
+        pool.shares = pool.shares.map(() => 0.0);
         pool.updated_at = new Date().toISOString();
 
-        mockDb.transactions.push({
-          id: `tx-${Math.random().toString(36).substring(2, 11)}`,
-          user_id: market.creator_id,
-          market_id: p_market_id,
-          type: "resolve_claim",
-          amount_tokens: refund,
-          amount_shares: refund,
-          fee_tokens: 0,
-          created_at: new Date().toISOString()
-        });
+        if (refund > 0) {
+          mockDb.transactions.push({
+            id: `tx-${Math.random().toString(36).substring(2, 11)}`,
+            user_id: market.creator_id,
+            market_id: p_market_id,
+            type: "resolve_claim",
+            amount_tokens: refund,
+            amount_shares: refund,
+            fee_tokens: 0,
+            created_at: new Date().toISOString()
+          });
+        }
 
         return { data: null as any, error: null };
       }
@@ -548,15 +487,16 @@ export async function dbRpc<T = any>(
         if (!user) throw new Error("User profile not found");
         if (!market) throw new Error("Market not found");
         if (market.status !== "resolved") throw new Error("Market is not resolved yet");
-        if (!pos || (pos.yes_shares === 0 && pos.no_shares === 0)) {
-          throw new Error("No position to claim");
+        
+        const outcomeIdx = market.outcomes.findIndex(opt => opt.toLowerCase() === market.outcome?.toLowerCase());
+        if (outcomeIdx === -1) throw new Error("Losing position");
+
+        const payout = pos ? pos.shares[outcomeIdx] : 0;
+
+        // Reset all position shares to 0
+        if (pos) {
+          pos.shares = pos.shares.map(() => 0.0);
         }
-
-        const payout = market.outcome === "YES" ? pos.yes_shares : pos.no_shares;
-
-        // Reset positions
-        pos.yes_shares = 0;
-        pos.no_shares = 0;
 
         if (payout > 0) {
           user.balance += payout;
@@ -604,10 +544,10 @@ export async function fetchMarkets(): Promise<Market[]> {
 
     return (markets || []).map(m => {
       const pool = (pools || []).find(p => p.market_id === m.id);
+      const prices = pool ? lmsrPrices(pool.shares, Number(pool.b)) : m.outcomes.map(() => 1 / m.outcomes.length);
       return {
         ...m,
-        yesPrice: pool ? getYesPrice(Number(pool.yes_shares), Number(pool.no_shares)) : 0.5,
-        noPrice: pool ? getNoPrice(Number(pool.yes_shares), Number(pool.no_shares)) : 0.5,
+        prices,
       };
     });
   }
@@ -615,10 +555,10 @@ export async function fetchMarkets(): Promise<Market[]> {
   // Mock implementation
   return Array.from(mockDb.markets.values()).map(m => {
     const pool = mockDb.liquidityPools.get(m.id)!;
+    const prices = lmsrPrices(pool.shares, pool.b);
     return {
       ...m,
-      yesPrice: getYesPrice(pool.yes_shares, pool.no_shares),
-      noPrice: getNoPrice(pool.yes_shares, pool.no_shares),
+      prices,
     };
   });
 }
@@ -643,8 +583,7 @@ export async function fetchMarketDetails(marketId: string) {
       market,
       pool: {
         ...pool,
-        yesPrice: getYesPrice(Number(pool.yes_shares), Number(pool.no_shares)),
-        noPrice: getNoPrice(Number(pool.yes_shares), Number(pool.no_shares)),
+        prices: lmsrPrices(pool.shares, Number(pool.b)),
       }
     };
   }
@@ -669,8 +608,7 @@ export async function fetchMarketDetails(marketId: string) {
     },
     pool: {
       ...pool,
-      yesPrice: getYesPrice(pool.yes_shares, pool.no_shares),
-      noPrice: getNoPrice(pool.yes_shares, pool.no_shares),
+      prices: lmsrPrices(pool.shares, pool.b),
     }
   };
 }
@@ -698,37 +636,6 @@ export async function fetchUserPositions(userId: string) {
     }));
 }
 
-export async function fetchUser(userId: string): Promise<UserProfile | null> {
-  if (!isMockMode && supabase) {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(userId)) {
-      return null;
-    }
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single();
-    if (error) return null;
-    return data;
-  }
-
-  return mockDb.users.get(userId) || null;
-}
-
-export async function fetchAllUsers(): Promise<UserProfile[]> {
-  if (!isMockMode && supabase) {
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .order("username");
-    if (error) throw error;
-    return data || [];
-  }
-
-  return Array.from(mockDb.users.values());
-}
-
 export async function fetchMarketTransactions(marketId: string) {
   if (!isMockMode && supabase) {
     const { data, error } = await supabase
@@ -740,7 +647,7 @@ export async function fetchMarketTransactions(marketId: string) {
     return data || [];
   }
 
-  // Mock database search
+  // Mock implementation
   return mockDb.transactions
     .filter((tx) => tx.market_id === marketId)
     .map((tx) => ({
@@ -780,6 +687,7 @@ export async function fetchGlobalTransactions() {
       market: mockDb.markets.get(tx.market_id) || {
         id: tx.market_id,
         question: "Unknown Market",
+        outcomes: ["YES", "NO"],
       }
     }))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -789,16 +697,20 @@ export async function fetchGlobalTransactions() {
 export async function getServerUser(): Promise<UserProfile | null> {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
-  const persona = cookieStore.get("persona")?.value;
-  if (!persona) return null;
+  const personaId = cookieStore.get("persona")?.value;
+  if (!personaId) return null;
+  return fetchUser(personaId);
+}
 
-  if (!isMockMode) {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(persona)) {
-      return null;
-    }
+export async function fetchAllUsers(): Promise<UserProfile[]> {
+  if (!isMockMode && supabase) {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .order("balance", { ascending: false });
+    if (error) throw error;
+    return data || [];
   }
 
-  const user = await fetchUser(persona);
-  return user || null;
+  return Array.from(mockDb.users.values());
 }

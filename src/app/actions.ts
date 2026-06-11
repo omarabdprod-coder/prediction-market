@@ -11,7 +11,7 @@ export interface ActionResponse<T = any> {
 }
 
 /**
- * Creates a new market by injecting 50 Tokens of starting liquidity.
+ * Creates a new market.
  */
 export async function createMarketAction(
   question: string,
@@ -19,7 +19,9 @@ export async function createMarketAction(
   resolutionDateStr: string,
   creatorId: string,
   imageUrl?: string,
-  taggedUsers?: string[]
+  taggedUsers?: string[],
+  outcomes?: string[],
+  b?: number
 ): Promise<ActionResponse<string>> {
   try {
     if (!question || question.trim().length === 0) {
@@ -38,6 +40,8 @@ export async function createMarketAction(
       return { success: false, error: "Resolution date must be in the future" };
     }
 
+    const outcomesList = outcomes && outcomes.length >= 2 ? outcomes : ["YES", "NO"];
+
     const { data: marketId, error } = await dbRpc("create_market_rpc", {
       p_question: question,
       p_description: description,
@@ -45,6 +49,8 @@ export async function createMarketAction(
       p_creator_id: creatorId,
       p_image_url: imageUrl || null,
       p_tagged_users: taggedUsers || null,
+      p_outcomes: outcomesList,
+      p_b: b || 200.00
     });
 
     if (error) {
@@ -59,12 +65,12 @@ export async function createMarketAction(
 }
 
 /**
- * Places a bet on YES or NO.
+ * Places a bet on a specific outcome option index.
  */
 export async function placeBetAction(
   userId: string,
   marketId: string,
-  outcome: "YES" | "NO",
+  outcomeIndex: number,
   wager: number
 ): Promise<ActionResponse<number>> {
   try {
@@ -72,10 +78,10 @@ export async function placeBetAction(
       return { success: false, error: "Wager must be greater than 0" };
     }
 
-    const rpcName = outcome === "YES" ? "place_bet_yes_rpc" : "place_bet_no_rpc";
-    const { data: shares, error } = await dbRpc(rpcName, {
+    const { data: shares, error } = await dbRpc("place_bet_rpc", {
       p_user_id: userId,
       p_market_id: marketId,
+      p_outcome_index: outcomeIndex,
       p_wager: wager,
     });
 
@@ -92,12 +98,12 @@ export async function placeBetAction(
 }
 
 /**
- * Sells YES or NO shares back to the pool.
+ * Sells shares of a specific outcome option index back to the pool.
  */
 export async function sellBetAction(
   userId: string,
   marketId: string,
-  outcome: "YES" | "NO",
+  outcomeIndex: number,
   shares: number
 ): Promise<ActionResponse<number>> {
   try {
@@ -105,10 +111,10 @@ export async function sellBetAction(
       return { success: false, error: "Shares to sell must be greater than 0" };
     }
 
-    const rpcName = outcome === "YES" ? "sell_bet_yes_rpc" : "sell_bet_no_rpc";
-    const { data: tokens, error } = await dbRpc(rpcName, {
+    const { data: tokens, error } = await dbRpc("sell_bet_rpc", {
       p_user_id: userId,
       p_market_id: marketId,
+      p_outcome_index: outcomeIndex,
       p_shares: shares,
     });
 
@@ -125,17 +131,17 @@ export async function sellBetAction(
 }
 
 /**
- * Resolves a market to YES or NO.
+ * Resolves a market to the winning outcome option name.
  */
 export async function resolveMarketAction(
   marketId: string,
-  outcome: "YES" | "NO",
+  outcomeName: string,
   adminId: string
 ): Promise<ActionResponse<void>> {
   try {
     const { error } = await dbRpc("resolve_market_rpc", {
       p_market_id: marketId,
-      p_outcome: outcome,
+      p_outcome: outcomeName,
       p_admin_id: adminId,
     });
 
@@ -174,7 +180,9 @@ export async function claimPayoutAction(
   } catch (e: any) {
     return { success: false, error: e.message || "An unexpected error occurred" };
   }
-}/**
+}
+
+/**
  * Unified authentication action (Password-free: logs in if exists, registers if new)
  */
 export async function authenticateAction(username: string): Promise<ActionResponse<string>> {
@@ -225,7 +233,6 @@ export async function logoutAction(): Promise<ActionResponse<void>> {
  */
 export async function claimFaucetAction(userId: string): Promise<ActionResponse<void>> {
   try {
-    // Restrict to MarketMaker only
     const { fetchUser } = await import("@/lib/supabase");
     const user = await fetchUser(userId);
     if (!user || user.username.toLowerCase() !== "marketmaker") {

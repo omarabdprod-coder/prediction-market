@@ -25,9 +25,10 @@ create table if not exists public.markets (
   resolution_date timestamp with time zone not null,
   creator_id uuid not null references public.users(id),
   status text not null default 'active' check (status in ('active', 'resolved')),
-  outcome text check (outcome in ('YES', 'NO')),
+  outcome text, -- The winning outcome (e.g., 'YES', 'Bob', 'None')
   image_url text,
   tagged_users text[],
+  outcomes text[] not null default array['YES', 'NO'],
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -36,12 +37,11 @@ alter table public.markets enable row level security;
 drop policy if exists "Allow public read access to markets" on public.markets;
 create policy "Allow public read access to markets" on public.markets for select using (true);
 
--- 3. Liquidity Pools Table (CPMM: x * y = k)
+-- 3. Liquidity Pools Table (LMSR)
 create table if not exists public.liquidity_pools (
   market_id uuid primary key references public.markets(id) on delete cascade,
-  yes_shares numeric(16, 4) not null check (yes_shares > 0),
-  no_shares numeric(16, 4) not null check (no_shares > 0),
-  k numeric(32, 4) not null check (k > 0),
+  shares numeric[] not null, -- Outstanding shares vector
+  b numeric not null default 200.00, -- LMSR liquidity parameter
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -55,8 +55,7 @@ create table if not exists public.user_positions (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid not null references public.users(id) on delete cascade,
   market_id uuid not null references public.markets(id) on delete cascade,
-  yes_shares numeric(16, 4) not null default 0.0000 check (yes_shares >= 0),
-  no_shares numeric(16, 4) not null default 0.0000 check (no_shares >= 0),
+  shares numeric[] not null, -- Shares owned for each outcome index
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   unique (user_id, market_id)
 );
@@ -71,7 +70,8 @@ create table if not exists public.transactions (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid not null references public.users(id) on delete cascade,
   market_id uuid not null references public.markets(id) on delete cascade,
-  type text not null check (type in ('buy_yes', 'buy_no', 'sell_yes', 'sell_no', 'resolve_claim', 'create_market')),
+  outcome_index integer, -- null for creation / resolution
+  type text not null check (type in ('buy', 'sell', 'resolve_claim', 'create_market')),
   amount_tokens numeric(12, 2) not null,
   amount_shares numeric(16, 4) not null,
   fee_tokens numeric(12, 2) not null default 0.00,
@@ -83,8 +83,70 @@ alter table public.transactions enable row level security;
 drop policy if exists "Allow public read access to transactions" on public.transactions;
 create policy "Allow public read access to transactions" on public.transactions for select using (true);
 
+
 -- ==========================================
--- TRANSACTIONAL RPC FUNCTIONS FOR TRADING ENGINE
+-- LMSR PRICING ENGINE PL/PGSQL UTILITIES
+-- ==========================================
+
+-- Cost Function: C(q) = b * ln( sum( exp(qi / b) ) )
+create or replace function public.lmsr_cost(p_shares numeric[], p_b numeric)
+returns numeric as $$
+declare
+  v_max numeric := -9999999999;
+  v_sum numeric := 0;
+  v_qi numeric;
+begin
+  -- Find max element in shares array to implement Log-Sum-Exp scaling
+  foreach v_qi in array p_shares loop
+    if v_qi > v_max then
+      v_max := v_qi;
+    end if;
+  end loop;
+
+  -- Sum exp((qi - max) / b)
+  foreach v_qi in array p_shares loop
+    v_sum := v_sum + exp((v_qi - v_max) / p_b);
+  end loop;
+
+  return v_max + p_b * ln(v_sum);
+end;
+$$ language plpgsql immutable;
+
+-- Prices Function: Returns probability (0 to 1) for each outcome
+create or replace function public.lmsr_prices(p_shares numeric[], p_b numeric)
+returns numeric[] as $$
+declare
+  v_max numeric := -9999999999;
+  v_sum numeric := 0;
+  v_qi numeric;
+  v_prices numeric[];
+  v_val numeric;
+begin
+  -- Find max
+  foreach v_qi in array p_shares loop
+    if v_qi > v_max then
+      v_max := v_qi;
+    end if;
+  end loop;
+
+  -- Sum exp((qi - max) / b)
+  foreach v_qi in array p_shares loop
+    v_sum := v_sum + exp((v_qi - v_max) / p_b);
+  end loop;
+
+  -- Construct prices array
+  foreach v_qi in array p_shares loop
+    v_val := exp((v_qi - v_max) / p_b) / v_sum;
+    v_prices := array_append(v_prices, v_val);
+  end loop;
+
+  return v_prices;
+end;
+$$ language plpgsql immutable;
+
+
+-- ==========================================
+-- TRANSACTIONAL RPC FUNCTIONS
 -- ==========================================
 
 -- 1. Create Market Function
@@ -94,65 +156,100 @@ create or replace function public.create_market_rpc(
   p_resolution_date timestamp with time zone,
   p_creator_id uuid,
   p_image_url text default null,
-  p_tagged_users text[] default null
+  p_tagged_users text[] default null,
+  p_outcomes text[] default array['YES', 'NO'],
+  p_b numeric default 200.00
 )
 returns uuid as $$
 declare
   v_market_id uuid;
+  v_n integer;
+  v_initial_shares numeric[];
+  v_subsidy numeric;
+  v_i integer;
 begin
+  v_n := cardinality(p_outcomes);
+  if v_n < 2 then
+    raise exception 'Market must have at least 2 outcomes';
+  end if;
+
+  -- In LMSR, the creator subsidizes the market
+  -- Initial cost of the pool is b * ln(N)
+  v_subsidy := p_b * ln(v_n);
+
   -- Check creator balance
-  if not exists (select 1 from public.users where id = p_creator_id and balance >= 50.00 for update) then
-    raise exception 'Insufficient balance to inject initial liquidity (50 Tokens required)';
+  if not exists (select 1 from public.users where id = p_creator_id and balance >= v_subsidy for update) then
+    raise exception 'Insufficient balance to inject initial liquidity (% Tokens required)', round(v_subsidy, 2);
   end if;
 
   -- Deduct balance
   update public.users
-  set balance = balance - 50.00
+  set balance = balance - v_subsidy
   where id = p_creator_id;
 
   -- Insert market
-  insert into public.markets (question, description, resolution_date, creator_id, image_url, tagged_users)
-  values (p_question, p_description, p_resolution_date, p_creator_id, p_image_url, p_tagged_users)
+  insert into public.markets (question, description, resolution_date, creator_id, image_url, tagged_users, outcomes)
+  values (p_question, p_description, p_resolution_date, p_creator_id, p_image_url, p_tagged_users, p_outcomes)
   returning id into v_market_id;
 
-  -- Insert liquidity pool (50 Yes, 50 No, k = 2500)
-  insert into public.liquidity_pools (market_id, yes_shares, no_shares, k)
-  values (v_market_id, 50.0000, 50.0000, 2500.0000);
+  -- Initialize shares array to 0.00 for all N outcomes
+  for v_i in 1..v_n loop
+    v_initial_shares := array_append(v_initial_shares, 0.0000);
+  end loop;
+
+  -- Insert liquidity pool
+  insert into public.liquidity_pools (market_id, shares, b)
+  values (v_market_id, v_initial_shares, p_b);
 
   -- Log transaction
   insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (p_creator_id, v_market_id, 'create_market', 50.00, 50.0000, 0.00);
+  values (p_creator_id, v_market_id, 'create_market', v_subsidy, 0.0000, 0.00);
 
   return v_market_id;
 end;
 $$ language plpgsql security definer;
 
--- 2. Place Bet YES Function
-create or replace function public.place_bet_yes_rpc(
+-- 2. Place Bet Function (Buy Shares)
+create or replace function public.place_bet_rpc(
   p_user_id uuid,
   p_market_id uuid,
+  p_outcome_index integer, -- 0-based index
   p_wager numeric
 )
 returns numeric as $$
 declare
   v_creator_id uuid;
-  v_yes_shares numeric;
-  v_no_shares numeric;
-  v_k numeric;
+  v_shares numeric[];
+  v_b numeric;
   v_fee numeric;
   v_net numeric;
-  v_new_no numeric;
-  v_new_yes numeric;
-  v_shares numeric;
+  v_current_cost numeric;
+  v_target_cost numeric;
+  v_max_q numeric := -9999999999;
+  v_sum_exp_others numeric := 0;
+  v_qk numeric;
+  v_term_inside numeric;
+  v_new_qi numeric;
+  v_bought_shares numeric;
+  v_new_shares numeric[];
+  v_i integer;
+  v_n integer;
+  v_user_shares numeric[];
+  v_pos_id uuid;
 begin
   -- Lock liquidity pool row
-  select yes_shares, no_shares, k into v_yes_shares, v_no_shares, v_k
+  select shares, b into v_shares, v_b
   from public.liquidity_pools
   where market_id = p_market_id
   for update;
 
   if not found then
     raise exception 'Liquidity pool not found';
+  end if;
+
+  v_n := cardinality(v_shares);
+  if p_outcome_index < 0 or p_outcome_index >= v_n then
+    raise exception 'Invalid outcome index % (cardinality is %)', p_outcome_index, v_n;
   end if;
 
   -- Check and lock user balance
@@ -166,10 +263,38 @@ begin
   -- Compute trade
   v_fee := p_wager * 0.02;
   v_net := p_wager - v_fee;
-  
-  v_new_no := v_no_shares + v_net;
-  v_new_yes := v_k / v_new_no;
-  v_shares := v_net + (v_yes_shares - v_new_yes);
+
+  v_current_cost := public.lmsr_cost(v_shares, v_b);
+  v_target_cost := v_current_cost + v_net;
+
+  -- Find max element in shares array
+  foreach v_qk in array v_shares loop
+    if v_qk > v_max_q then
+      v_max_q := v_qk;
+    end if;
+  end loop;
+
+  -- Sum exp((qk - max_q) / b) for others
+  for v_i in 1..v_n loop
+    if (v_i - 1) != p_outcome_index then
+      v_sum_exp_others := v_sum_exp_others + exp((v_shares[v_i] - v_max_q) / v_b);
+    end if;
+  end loop;
+
+  -- Solve for new_qi
+  -- term = exp((target_cost - max_q)/b) - sum_exp_others
+  v_term_inside := exp((v_target_cost - v_max_q) / v_b) - v_sum_exp_others;
+
+  if v_term_inside <= 0 then
+    raise exception 'Math error: Insufficient pool liquidity for this bet size';
+  end if;
+
+  v_new_qi := v_max_q + v_b * ln(v_term_inside);
+  v_bought_shares := v_new_qi - v_shares[p_outcome_index + 1];
+
+  -- Update pool shares array
+  v_new_shares := v_shares;
+  v_new_shares[p_outcome_index + 1] := v_new_qi;
 
   -- Deduct user balance
   update public.users set balance = balance - p_wager where id = p_user_id;
@@ -179,43 +304,64 @@ begin
 
   -- Update pool
   update public.liquidity_pools
-  set yes_shares = v_new_yes, no_shares = v_new_no, updated_at = now()
+  set shares = v_new_shares, updated_at = now()
   where market_id = p_market_id;
 
   -- Update/Insert user position
-  insert into public.user_positions (user_id, market_id, yes_shares, no_shares)
-  values (p_user_id, p_market_id, v_shares, 0)
-  on conflict (user_id, market_id) do update
-  set yes_shares = public.user_positions.yes_shares + v_shares;
+  select id, shares into v_pos_id, v_user_shares
+  from public.user_positions
+  where user_id = p_user_id and market_id = p_market_id
+  for update;
+
+  if not found then
+    -- Initialize user shares array to 0.00 for all N outcomes
+    for v_i in 1..v_n loop
+      v_user_shares := array_append(v_user_shares, 0.0000);
+    end loop;
+    v_user_shares[p_outcome_index + 1] := v_bought_shares;
+
+    insert into public.user_positions (user_id, market_id, shares)
+    values (p_user_id, p_market_id, v_user_shares);
+  else
+    v_user_shares[p_outcome_index + 1] := v_user_shares[p_outcome_index + 1] + v_bought_shares;
+
+    update public.user_positions
+    set shares = v_user_shares
+    where id = v_pos_id;
+  end if;
 
   -- Log transaction
-  insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (p_user_id, p_market_id, 'buy_yes', p_wager, v_shares, v_fee);
+  insert into public.transactions (user_id, market_id, type, outcome_index, amount_tokens, amount_shares, fee_tokens)
+  values (p_user_id, p_market_id, 'buy', p_outcome_index, p_wager, v_bought_shares, v_fee);
 
-  return v_shares;
+  return v_bought_shares;
 end;
 $$ language plpgsql security definer;
 
--- 3. Place Bet NO Function
-create or replace function public.place_bet_no_rpc(
+-- 3. Sell Bet Function (Sell Shares)
+create or replace function public.sell_bet_rpc(
   p_user_id uuid,
   p_market_id uuid,
-  p_wager numeric
+  p_outcome_index integer,
+  p_shares numeric
 )
 returns numeric as $$
 declare
   v_creator_id uuid;
-  v_yes_shares numeric;
-  v_no_shares numeric;
-  v_k numeric;
+  v_shares numeric[];
+  v_b numeric;
+  v_user_shares numeric[];
+  v_pos_id uuid;
+  v_n integer;
+  v_current_cost numeric;
+  v_new_shares numeric[];
+  v_target_cost numeric;
+  v_gross_tokens numeric;
   v_fee numeric;
-  v_net numeric;
-  v_new_yes numeric;
-  v_new_no numeric;
-  v_shares numeric;
+  v_net_tokens numeric;
 begin
   -- Lock liquidity pool row
-  select yes_shares, no_shares, k into v_yes_shares, v_no_shares, v_k
+  select shares, b into v_shares, v_b
   from public.liquidity_pools
   where market_id = p_market_id
   for update;
@@ -224,115 +370,45 @@ begin
     raise exception 'Liquidity pool not found';
   end if;
 
-  -- Check and lock user balance
-  if not exists (select 1 from public.users where id = p_user_id and balance >= p_wager for update) then
-    raise exception 'Insufficient balance';
+  v_n := cardinality(v_shares);
+  if p_outcome_index < 0 or p_outcome_index >= v_n then
+    raise exception 'Invalid outcome index';
+  end if;
+
+  -- Lock user position
+  select id, shares into v_pos_id, v_user_shares
+  from public.user_positions
+  where user_id = p_user_id and market_id = p_market_id
+  for update;
+
+  if not found or v_user_shares[p_outcome_index + 1] < p_shares then
+    raise exception 'Insufficient shares in user position';
   end if;
 
   -- Get market creator
   select creator_id into v_creator_id from public.markets where id = p_market_id;
 
-  -- Compute trade
-  v_fee := p_wager * 0.02;
-  v_net := p_wager - v_fee;
+  -- Compute sell math
+  v_current_cost := public.lmsr_cost(v_shares, v_b);
   
-  v_new_yes := v_yes_shares + v_net;
-  v_new_no := v_k / v_new_yes;
-  v_shares := v_net + (v_no_shares - v_new_no);
+  v_new_shares := v_shares;
+  v_new_shares[p_outcome_index + 1] := v_shares[p_outcome_index + 1] - p_shares;
+  
+  v_target_cost := public.lmsr_cost(v_new_shares, v_b);
+  v_gross_tokens := v_current_cost - v_target_cost;
 
-  -- Deduct user balance
-  update public.users set balance = balance - p_wager where id = p_user_id;
-
-  -- Add fee to creator balance
-  update public.users set balance = balance + v_fee where id = v_creator_id;
-
-  -- Update pool
-  update public.liquidity_pools
-  set yes_shares = v_new_yes, no_shares = v_new_no, updated_at = now()
-  where market_id = p_market_id;
-
-  -- Update/Insert user position
-  insert into public.user_positions (user_id, market_id, yes_shares, no_shares)
-  values (p_user_id, p_market_id, 0, v_shares)
-  on conflict (user_id, market_id) do update
-  set no_shares = public.user_positions.no_shares + v_shares;
-
-  -- Log transaction
-  insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (p_user_id, p_market_id, 'buy_no', p_wager, v_shares, v_fee);
-
-  return v_shares;
-end;
-$$ language plpgsql security definer;
-
--- 4. Sell Bet YES Function
-create or replace function public.sell_bet_yes_rpc(
-  p_user_id uuid,
-  p_market_id uuid,
-  p_shares numeric
-)
-returns numeric as $$
-declare
-  v_creator_id uuid;
-  v_yes_shares numeric;
-  v_no_shares numeric;
-  v_k numeric;
-  v_user_yes numeric;
-  v_user_no numeric;
-  v_L numeric;
-  v_d numeric;
-  v_gross_tokens numeric;
-  v_fee numeric;
-  v_net_tokens numeric;
-  v_new_no numeric;
-  v_new_yes numeric;
-begin
-  -- Lock liquidity pool row
-  select yes_shares, no_shares, k into v_yes_shares, v_no_shares, v_k
-  from public.liquidity_pools
-  where market_id = p_market_id
-  for update;
-
-  if not found then
-    raise exception 'Liquidity pool not found';
-  end if;
-
-  -- Lock user position
-  select yes_shares, no_shares into v_user_yes, v_user_no
-  from public.user_positions
-  where user_id = p_user_id and market_id = p_market_id
-  for update;
-
-  if not found or v_user_yes < p_shares then
-    raise exception 'Insufficient YES shares to sell';
-  end if;
-
-  -- Get market creator
-  select creator_id into v_creator_id from public.markets where id = p_market_id;
-
-  -- Compute sell math
-  v_L := p_shares + v_yes_shares;
-  v_d := (v_L + v_no_shares) * (v_L + v_no_shares) - 4 * p_shares * v_no_shares;
-  if v_d < 0 then
-    raise exception 'Math error: negative discriminant';
-  end if;
-
-  v_gross_tokens := ((v_L + v_no_shares) - sqrt(v_d)) / 2;
-
-  if v_gross_tokens >= v_no_shares then
-    raise exception 'Insufficient pool liquidity';
+  if v_gross_tokens <= 0 then
+    raise exception 'Math error: negative tokens returned';
   end if;
 
   v_fee := v_gross_tokens * 0.02;
   v_net_tokens := v_gross_tokens - v_fee;
 
-  v_new_no := v_no_shares - v_gross_tokens;
-  v_new_yes := v_k / v_new_no;
-
   -- Deduct user shares
+  v_user_shares[p_outcome_index + 1] := v_user_shares[p_outcome_index + 1] - p_shares;
   update public.user_positions
-  set yes_shares = yes_shares - p_shares
-  where user_id = p_user_id and market_id = p_market_id;
+  set shares = v_user_shares
+  where id = v_pos_id;
 
   -- Add net tokens to user balance
   update public.users set balance = balance + v_net_tokens where id = p_user_id;
@@ -342,121 +418,39 @@ begin
 
   -- Update pool
   update public.liquidity_pools
-  set yes_shares = v_new_yes, no_shares = v_new_no, updated_at = now()
+  set shares = v_new_shares, updated_at = now()
   where market_id = p_market_id;
 
   -- Log transaction
-  insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (p_user_id, p_market_id, 'sell_yes', v_net_tokens, p_shares, v_fee);
+  insert into public.transactions (user_id, market_id, type, outcome_index, amount_tokens, amount_shares, fee_tokens)
+  values (p_user_id, p_market_id, 'sell', p_outcome_index, v_net_tokens, p_shares, v_fee);
 
   return v_net_tokens;
 end;
 $$ language plpgsql security definer;
 
--- 5. Sell Bet NO Function
-create or replace function public.sell_bet_no_rpc(
-  p_user_id uuid,
-  p_market_id uuid,
-  p_shares numeric
-)
-returns numeric as $$
-declare
-  v_creator_id uuid;
-  v_yes_shares numeric;
-  v_no_shares numeric;
-  v_k numeric;
-  v_user_yes numeric;
-  v_user_no numeric;
-  v_L numeric;
-  v_d numeric;
-  v_gross_tokens numeric;
-  v_fee numeric;
-  v_net_tokens numeric;
-  v_new_yes numeric;
-  v_new_no numeric;
-begin
-  -- Lock liquidity pool row
-  select yes_shares, no_shares, k into v_yes_shares, v_no_shares, v_k
-  from public.liquidity_pools
-  where market_id = p_market_id
-  for update;
-
-  if not found then
-    raise exception 'Liquidity pool not found';
-  end if;
-
-  -- Lock user position
-  select yes_shares, no_shares into v_user_yes, v_user_no
-  from public.user_positions
-  where user_id = p_user_id and market_id = p_market_id
-  for update;
-
-  if not found or v_user_no < p_shares then
-    raise exception 'Insufficient NO shares to sell';
-  end if;
-
-  -- Get market creator
-  select creator_id into v_creator_id from public.markets where id = p_market_id;
-
-  -- Compute sell math
-  v_L := p_shares + v_no_shares;
-  v_d := (v_L + v_yes_shares) * (v_L + v_yes_shares) - 4 * p_shares * v_yes_shares;
-  if v_d < 0 then
-    raise exception 'Math error: negative discriminant';
-  end if;
-
-  v_gross_tokens := ((v_L + v_yes_shares) - sqrt(v_d)) / 2;
-
-  if v_gross_tokens >= v_yes_shares then
-    raise exception 'Insufficient pool liquidity';
-  end if;
-
-  v_fee := v_gross_tokens * 0.02;
-  v_net_tokens := v_gross_tokens - v_fee;
-
-  v_new_yes := v_yes_shares - v_gross_tokens;
-  v_new_no := v_k / v_new_yes;
-
-  -- Deduct user shares
-  update public.user_positions
-  set no_shares = no_shares - p_shares
-  where user_id = p_user_id and market_id = p_market_id;
-
-  -- Add net tokens to user balance
-  update public.users set balance = balance + v_net_tokens where id = p_user_id;
-
-  -- Add fee to creator balance
-  update public.users set balance = balance + v_fee where id = v_creator_id;
-
-  -- Update pool
-  update public.liquidity_pools
-  set yes_shares = v_new_yes, no_shares = v_new_no, updated_at = now()
-  where market_id = p_market_id;
-
-  -- Log transaction
-  insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (p_user_id, p_market_id, 'sell_no', v_net_tokens, p_shares, v_fee);
-
-  return v_net_tokens;
-end;
-$$ language plpgsql security definer;
-
--- 6. Resolve Market Function
+-- 4. Resolve Market Function
 create or replace function public.resolve_market_rpc(
   p_market_id uuid,
-  p_outcome text,
+  p_outcome text, -- Name of the winning outcome option (e.g. 'YES' or 'Bob')
   p_admin_id uuid
 )
 returns void as $$
 declare
   v_creator_id uuid;
   v_status text;
+  v_outcomes text[];
+  v_outcome_index integer := -1;
+  v_shares numeric[];
+  v_b numeric;
+  v_final_cost numeric;
+  v_q_win numeric;
   v_refund numeric;
-  v_yes_shares numeric;
-  v_no_shares numeric;
+  v_i integer;
+  v_new_shares numeric[];
 begin
   -- Lock market
-  select creator_id, status into v_creator_id, v_status
+  select creator_id, status, outcomes into v_creator_id, v_status, v_outcomes
   from public.markets
   where id = p_market_id
   for update;
@@ -476,44 +470,59 @@ begin
     raise exception 'Only the market creator or MarketMaker can resolve this market';
   end if;
 
-  if p_outcome not in ('YES', 'NO') then
-    raise exception 'Outcome must be YES or NO';
+  -- Find the index of the outcome name
+  for v_i in 1..cardinality(v_outcomes) loop
+    if lower(v_outcomes[v_i]) = lower(p_outcome) then
+      v_outcome_index := v_i - 1;
+      exit;
+    end if;
+  end loop;
+
+  if v_outcome_index = -1 then
+    raise exception 'Winning outcome must match one of the market options';
   end if;
 
   -- Lock liquidity pool to payout remaining LP tokens
-  select yes_shares, no_shares into v_yes_shares, v_no_shares
+  select shares, b into v_shares, v_b
   from public.liquidity_pools
   where market_id = p_market_id
   for update;
 
-  if p_outcome = 'YES' then
-    v_refund := v_yes_shares;
-  else
-    v_refund := v_no_shares;
-  end if;
+  -- Creator's refund is C(q) - q_win
+  v_final_cost := public.lmsr_cost(v_shares, v_b);
+  v_q_win := v_shares[v_outcome_index + 1];
+  v_refund := v_final_cost - v_q_win;
 
   -- Update market outcome and status
   update public.markets
   set status = 'resolved', outcome = p_outcome
   where id = p_market_id;
 
-  -- Return pool value to creator
-  update public.users
-  set balance = balance + v_refund
-  where id = v_creator_id;
+  -- Return remaining pool value (collateral surplus) to creator
+  if v_refund > 0 then
+    update public.users
+    set balance = balance + v_refund
+    where id = v_creator_id;
+  end if;
 
-  -- Deplete liquidity pool shares to a minimal amount (cannot be 0 due to constraints)
+  -- Deplete liquidity pool shares to 0.00
+  for v_i in 1..cardinality(v_shares) loop
+    v_new_shares := array_append(v_new_shares, 0.0000);
+  end loop;
+  
   update public.liquidity_pools
-  set yes_shares = 0.0001, no_shares = 0.0001, k = 0.00000001, updated_at = now()
+  set shares = v_new_shares, updated_at = now()
   where market_id = p_market_id;
 
   -- Log transaction
-  insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
-  values (v_creator_id, p_market_id, 'resolve_claim', v_refund, v_refund, 0);
+  if v_refund > 0 then
+    insert into public.transactions (user_id, market_id, type, amount_tokens, amount_shares, fee_tokens)
+    values (v_creator_id, p_market_id, 'resolve_claim', v_refund, v_refund, 0);
+  end if;
 end;
 $$ language plpgsql security definer;
 
--- 7. Claim Payout Function
+-- 5. Claim Payout Function
 create or replace function public.claim_payout_rpc(
   p_user_id uuid,
   p_market_id uuid
@@ -522,12 +531,16 @@ returns numeric as $$
 declare
   v_status text;
   v_outcome text;
-  v_user_yes numeric;
-  v_user_no numeric;
+  v_outcomes text[];
+  v_outcome_index integer := -1;
+  v_user_shares numeric[];
   v_payout numeric := 0;
+  v_pos_id uuid;
+  v_i integer;
+  v_new_user_shares numeric[];
 begin
   -- Check market status
-  select status, outcome into v_status, v_outcome
+  select status, outcome, outcomes into v_status, v_outcome, v_outcomes
   from public.markets
   where id = p_market_id;
 
@@ -539,35 +552,43 @@ begin
     raise exception 'Market is not resolved yet';
   end if;
 
+  -- Find index of winning outcome
+  for v_i in 1..cardinality(v_outcomes) loop
+    if lower(v_outcomes[v_i]) = lower(v_outcome) then
+      v_outcome_index := v_i - 1;
+      exit;
+    end if;
+  end loop;
+
+  if v_outcome_index = -1 then
+    raise exception 'Outcome not found in market options';
+  end if;
+
   -- Lock user position
-  select yes_shares, no_shares into v_user_yes, v_user_no
+  select id, shares into v_pos_id, v_user_shares
   from public.user_positions
   where user_id = p_user_id and market_id = p_market_id
   for update;
 
-  if not found or (v_user_yes = 0 and v_user_no = 0) then
+  if not found then
     raise exception 'No position to claim';
   end if;
 
   -- Calculate payout
-  if v_outcome = 'YES' then
-    v_payout := v_user_yes;
-  elsif v_outcome = 'NO' then
-    v_payout := v_user_no;
-  end if;
+  v_payout := v_user_shares[v_outcome_index + 1];
+
+  -- Reset all user shares in this position to 0
+  for v_i in 1..cardinality(v_user_shares) loop
+    v_new_user_shares := array_append(v_new_user_shares, 0.0000);
+  end loop;
+
+  update public.user_positions
+  set shares = v_new_user_shares
+  where id = v_pos_id;
 
   if v_payout <= 0 then
-    -- User had shares of the losing outcome, set position to 0 anyway
-    update public.user_positions
-    set yes_shares = 0, no_shares = 0
-    where user_id = p_user_id and market_id = p_market_id;
     return 0;
   end if;
-
-  -- Update user position to 0
-  update public.user_positions
-  set yes_shares = 0, no_shares = 0
-  where user_id = p_user_id and market_id = p_market_id;
 
   -- Payout user
   update public.users
@@ -581,6 +602,7 @@ begin
   return v_payout;
 end;
 $$ language plpgsql security definer;
+
 
 -- Login or Register User RPC (Password-free)
 create or replace function public.login_or_register_user_rpc(

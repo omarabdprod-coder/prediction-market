@@ -5,12 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Market, UserProfile, UserPosition, LiquidityPool } from "@/lib/supabase";
 import {
-  calculateBuyYes,
-  calculateBuyNo,
-  calculateSellYes,
-  calculateSellNo,
-  getYesPrice,
-  getNoPrice,
+  calculateBuyLmsr,
+  calculateSellLmsr,
+  lmsrCost,
+  lmsrPrices,
 } from "@/lib/amm";
 import {
   placeBetAction,
@@ -37,57 +35,54 @@ interface ChartPoint {
   price: number;
 }
 
-function getPriceHistory(transactions: any[], initialYes = 50, initialNo = 50): ChartPoint[] {
-  let x = initialYes;
-  let y = initialNo;
-  const k = x * y;
+function getPriceHistory(transactions: any[], outcomes: string[], outcomeIndex: number, b: number): ChartPoint[] {
+  const q = outcomes.map(() => 0.0);
   const points: ChartPoint[] = [];
 
   const baseTime = transactions.length > 0
     ? new Date(transactions[0].created_at)
     : new Date();
 
-  // Initial anchor point
+  // Initial anchor point (equal probability)
   points.push({
     time: new Date(baseTime.getTime() - 1000 * 60 * 60 * 2),
-    price: 50
+    price: Math.round((1 / outcomes.length) * 100)
   });
 
   const tradeTxs = transactions.filter(tx => tx.type !== "create_market");
 
   tradeTxs.forEach((tx) => {
-    const tokens = Number(tx.amount_tokens);
-    const fee = Number(tx.fee_tokens);
+    let outcomeTradedIdx = -1;
 
-    if (tx.type === "buy_yes") {
-      const net = tokens - fee;
-      y = y + net;
-      x = k / y;
-    } else if (tx.type === "buy_no") {
-      const net = tokens - fee;
-      x = x + net;
-      y = k / x;
-    } else if (tx.type === "sell_yes") {
-      const gross = tokens / 0.98;
-      y = y - gross;
-      x = k / y;
-    } else if (tx.type === "sell_no") {
-      const gross = tokens / 0.98;
-      x = x - gross;
-      y = k / x;
+    // Fallback for legacy transaction types
+    if (tx.outcome_index !== undefined && tx.outcome_index !== null) {
+      outcomeTradedIdx = Number(tx.outcome_index);
+    } else if (tx.type === "buy_yes" || tx.type === "sell_yes") {
+      outcomeTradedIdx = outcomes.indexOf("YES");
+    } else if (tx.type === "buy_no" || tx.type === "sell_no") {
+      outcomeTradedIdx = outcomes.indexOf("NO");
     }
 
-    const price = y / (x + y);
+    if (outcomeTradedIdx >= 0 && outcomeTradedIdx < outcomes.length) {
+      const isBuy = tx.type.startsWith("buy");
+      if (isBuy) {
+        q[outcomeTradedIdx] += Number(tx.amount_shares);
+      } else {
+        q[outcomeTradedIdx] -= Number(tx.amount_shares);
+      }
+    }
+
+    const prices = lmsrPrices(q, b);
     points.push({
       time: new Date(tx.created_at),
-      price: Math.round(price * 100)
+      price: Math.round((prices[outcomeIndex] || 0.0) * 100)
     });
   });
 
   return points;
 }
 
-function LineChart({ points }: { points: ChartPoint[] }) {
+function LineChart({ points, label }: { points: ChartPoint[]; label: string }) {
   if (points.length <= 1) {
     return (
       <div className="w-full bg-slate-950/40 rounded-xl border border-white/5 p-6 text-center text-xs text-slate-500 font-medium">
@@ -121,7 +116,7 @@ function LineChart({ points }: { points: ChartPoint[] }) {
   return (
     <div className="w-full bg-slate-950/40 rounded-xl border border-white/5 p-4 space-y-3 font-mono">
       <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-        <span>YES Price Chart</span>
+        <span>"{label}" Price Chart</span>
         <span className="text-slate-500 font-normal">
           {points.length - 1} trade{points.length - 1 !== 1 ? "s" : ""}
         </span>
@@ -130,12 +125,12 @@ function LineChart({ points }: { points: ChartPoint[] }) {
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible">
           <defs>
             <linearGradient id="chart-glow" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.15" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.15" />
+              <stop offset="100%" stopColor="#6366f1" stopOpacity="0.0" />
             </linearGradient>
             <linearGradient id="line-gradient" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%" stopColor="#6366f1" />
-              <stop offset="100%" stopColor="#10b981" />
+              <stop offset="100%" stopColor="#4f46e5" />
             </linearGradient>
           </defs>
 
@@ -164,7 +159,7 @@ function LineChart({ points }: { points: ChartPoint[] }) {
               cx={pt.x}
               cy={pt.y}
               r="3.5"
-              className="fill-emerald-400 stroke-slate-900 stroke-[1px] hover:r-[4.5px] transition-all cursor-pointer"
+              className="fill-indigo-400 stroke-slate-900 stroke-[1px] hover:r-[4.5px] transition-all cursor-pointer"
             >
               <title>{`${pt.price}% on ${pt.date.toLocaleString()}`}</title>
             </circle>
@@ -181,8 +176,8 @@ function LineChart({ points }: { points: ChartPoint[] }) {
 
 interface MarketDetailClientProps {
   currentUser: UserProfile;
-  market: any; // Market with creator
-  pool: any;   // LiquidityPool with yesPrice and noPrice
+  market: any;
+  pool: any;
   position: UserPosition | null;
   transactions: any[];
 }
@@ -195,11 +190,16 @@ export default function MarketDetailClient({
   transactions,
 }: MarketDetailClientProps) {
   const router = useRouter();
-  const chartPoints = getPriceHistory(transactions);
+  const outcomes = market.outcomes || ["YES", "NO"];
+  const bVal = Number(pool.b || 100.00);
+
+  // Selected Outcome for trading
+  const [outcomeIndex, setOutcomeIndex] = useState(0);
+
+  const chartPoints = getPriceHistory(transactions, outcomes, outcomeIndex, bVal);
 
   // Trade States
   const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
-  const [outcome, setOutcome] = useState<"YES" | "NO">("YES");
   const [amountInput, setAmountInput] = useState("");
   
   // Dynamic trade computation previews
@@ -211,15 +211,14 @@ export default function MarketDetailClient({
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   // Resolution & Claim States
-  const [adminOutcome, setAdminOutcome] = useState<"YES" | "NO">("YES");
+  const [adminOutcome, setAdminOutcome] = useState(outcomes[0]);
   const [actionLoading, setActionLoading] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const isCreator = market.creator_id === currentUser.id || currentUser.username.toLowerCase() === "marketmaker";
   const isMarketActive = market.status === "active";
 
-  const yesPercent = Math.round((pool.yesPrice || 0.5) * 100);
-  const noPercent = 100 - yesPercent;
+  const prices = pool.prices || outcomes.map(() => 1 / outcomes.length);
 
   // Run AMM calculations client-side to provide a live preview as the user types
   useEffect(() => {
@@ -237,51 +236,33 @@ export default function MarketDetailClient({
 
     try {
       if (tradeType === "buy") {
-        // Validation: Cannot wager more tokens than balance
         if (value > currentUser.balance) {
           setPreviewError("Wager exceeds your available token balance");
           return;
         }
 
-        if (outcome === "YES") {
-          const res = calculateBuyYes(value, Number(pool.yes_shares), Number(pool.no_shares));
-          setPreviewShares(res.shares);
-          setPreviewFee(res.fee);
-          setPreviewAvgPrice(res.avgPrice);
-          setPreviewSlippage(res.slippage);
-        } else {
-          const res = calculateBuyNo(value, Number(pool.yes_shares), Number(pool.no_shares));
-          setPreviewShares(res.shares);
-          setPreviewFee(res.fee);
-          setPreviewAvgPrice(res.avgPrice);
-          setPreviewSlippage(res.slippage);
-        }
+        const res = calculateBuyLmsr(value, pool.shares, outcomeIndex, bVal);
+        setPreviewShares(res.shares);
+        setPreviewFee(res.fee);
+        setPreviewAvgPrice(res.avgPrice);
+        setPreviewSlippage(res.slippage);
       } else {
-        // Sell Validation: Cannot sell more shares than user owns
-        const ownedShares = outcome === "YES" ? (position?.yes_shares || 0) : (position?.no_shares || 0);
+        const ownedShares = position?.shares?.[outcomeIndex] || 0;
         if (value > Number(ownedShares)) {
-          setPreviewError(`Insufficient shares. You only own ${Number(ownedShares).toFixed(1)} ${outcome} shares.`);
+          setPreviewError(`Insufficient shares. You only own ${Number(ownedShares).toFixed(1)} shares.`);
           return;
         }
 
-        if (outcome === "YES") {
-          const res = calculateSellYes(value, Number(pool.yes_shares), Number(pool.no_shares));
-          setPreviewTokens(res.tokens);
-          setPreviewFee(res.fee);
-          setPreviewAvgPrice(res.avgPrice);
-          setPreviewSlippage(res.slippage);
-        } else {
-          const res = calculateSellNo(value, Number(pool.yes_shares), Number(pool.no_shares));
-          setPreviewTokens(res.tokens);
-          setPreviewFee(res.fee);
-          setPreviewAvgPrice(res.avgPrice);
-          setPreviewSlippage(res.slippage);
-        }
+        const res = calculateSellLmsr(value, pool.shares, outcomeIndex, bVal);
+        setPreviewTokens(res.tokens);
+        setPreviewFee(res.fee);
+        setPreviewAvgPrice(res.avgPrice);
+        setPreviewSlippage(res.slippage);
       }
     } catch (e: any) {
       setPreviewError(e.message || "Invalid trade amount (insufficient pool liquidity)");
     }
-  }, [amountInput, tradeType, outcome, pool, currentUser.balance, position]);
+  }, [amountInput, tradeType, outcomeIndex, pool, currentUser.balance, position, bVal]);
 
   // Execute trade Server Action
   const handleTradeSubmit = async (e: React.FormEvent) => {
@@ -294,9 +275,9 @@ export default function MarketDetailClient({
 
     let res;
     if (tradeType === "buy") {
-      res = await placeBetAction(currentUser.id, market.id, outcome, value);
+      res = await placeBetAction(currentUser.id, market.id, outcomeIndex, value);
     } else {
-      res = await sellBetAction(currentUser.id, market.id, outcome, value);
+      res = await sellBetAction(currentUser.id, market.id, outcomeIndex, value);
     }
 
     setActionLoading(false);
@@ -305,7 +286,7 @@ export default function MarketDetailClient({
       setFeedbackMsg({
         type: "success",
         text: tradeType === "buy"
-          ? `Successfully bought ${res.data?.toFixed(2)} ${outcome} shares!`
+          ? `Successfully bought ${res.data?.toFixed(2)} shares of "${outcomes[outcomeIndex]}"!`
           : `Successfully sold ${value} shares for ${res.data?.toFixed(2)} Tokens!`,
       });
       setAmountInput("");
@@ -317,9 +298,9 @@ export default function MarketDetailClient({
     }
   };
 
-  // Resolve market (Creator only)
+  // Resolve market (Creator or Admin only)
   const handleResolveMarket = async () => {
-    if (!confirm(`Are you absolutely sure you want to resolve this market as ${adminOutcome}? This action is irreversible.`)) {
+    if (!confirm(`Are you absolutely sure you want to resolve this market as "${adminOutcome}"? This action is irreversible.`)) {
       return;
     }
 
@@ -332,7 +313,7 @@ export default function MarketDetailClient({
     if (res.success) {
       setFeedbackMsg({
         type: "success",
-        text: `Market successfully resolved as ${adminOutcome}! The pool has been liquidated and LP tokens returned.`,
+        text: `Market successfully resolved to "${adminOutcome}"! LP reserves have been settled.`,
       });
     } else {
       setFeedbackMsg({
@@ -355,7 +336,7 @@ export default function MarketDetailClient({
         type: "success",
         text: res.data && res.data > 0
           ? `Successfully cashed out your winning shares for ${res.data.toFixed(2)} Tokens!`
-          : "Position claimed. You held losing shares (worth 0 tokens). Your position has been closed.",
+          : "Position claimed. You held losing options (worth 0 tokens). Your position has been closed.",
       });
     } else {
       setFeedbackMsg({
@@ -397,6 +378,8 @@ export default function MarketDetailClient({
     );
   }
 
+  const userHasPositions = position && position.shares && position.shares.some(s => Number(s) > 0);
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 flex-1">
       {/* Back link */}
@@ -424,99 +407,88 @@ export default function MarketDetailClient({
             </div>
 
             <div className="p-6 sm:p-8 space-y-6">
-            {/* Tag/Meta */}
-            <div className="flex flex-wrap items-center gap-3">
-              {isMarketActive ? (
-                <span className="text-[10px] font-black uppercase tracking-wider border border-emerald-500/20 bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded animate-pulse">
-                  Live
+              {/* Tag/Meta */}
+              <div className="flex flex-wrap items-center gap-3">
+                {isMarketActive ? (
+                  <span className="text-[10px] font-black uppercase tracking-wider border border-emerald-500/20 bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded animate-pulse">
+                    Live
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-black uppercase tracking-wider border border-indigo-500/20 bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded">
+                    Resolved {market.outcome}
+                  </span>
+                )}
+                <span className="text-xs text-slate-400">
+                  Resolution Date: <strong>{new Date(market.resolution_date).toLocaleString()}</strong>
                 </span>
-              ) : (
-                <span className="text-[10px] font-black uppercase tracking-wider border border-indigo-500/20 bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded">
-                  Resolved {market.outcome}
-                </span>
-              )}
-              <span className="text-xs text-slate-400">
-                Resolution Date: <strong>{new Date(market.resolution_date).toLocaleString()}</strong>
-              </span>
-            </div>
+              </div>
 
-            {/* Question */}
-            <h1 className="text-xl sm:text-2xl font-black text-slate-100 tracking-tight leading-tight">
-              {market.question}
-            </h1>
+              {/* Question */}
+              <h1 className="text-xl sm:text-2xl font-black text-slate-100 tracking-tight leading-tight">
+                {market.question}
+              </h1>
 
-            {/* Description */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Resolution details
-              </h3>
-              <p className="text-sm text-slate-300 leading-relaxed bg-slate-950/40 rounded-xl border border-white/5 p-4 font-normal">
-                {market.description || "No further description provided."}
-              </p>
-            </div>
+              {/* Description */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Resolution details
+                </h3>
+                <p className="text-sm text-slate-300 leading-relaxed bg-slate-950/40 rounded-xl border border-white/5 p-4 font-normal">
+                  {market.description || "No further description provided."}
+                </p>
+              </div>
 
-            {/* Probability Scale */}
-            <div className="space-y-4 border-t border-white/5 pt-6">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Market Probability
-              </h3>
+              {/* Probability Scales */}
+              <div className="space-y-4 border-t border-white/5 pt-6">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Market Outcomes Probabilities
+                </h3>
 
-              <div className="flex items-center justify-between font-mono text-sm">
-                <div className="space-y-1">
-                  <span className="text-slate-400 text-xs font-semibold">YES Share Price</span>
-                  <div className="text-xl font-black text-emerald-400 flex items-center gap-1">
-                    {pool.yesPrice.toFixed(2)} T
-                    <span className="text-xs font-bold bg-emerald-500/10 px-2 py-0.5 rounded">
-                      {yesPercent}%
-                    </span>
-                  </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {outcomes.map((opt: string, idx: number) => {
+                    const pct = Math.round((prices[idx] || 0.0) * 100);
+                    return (
+                      <div
+                        key={opt}
+                        onClick={() => isMarketActive && setOutcomeIndex(idx)}
+                        className={`rounded-xl p-3 border font-mono transition-all cursor-pointer text-left flex flex-col justify-between h-20 ${
+                          outcomeIndex === idx && isMarketActive
+                            ? "bg-indigo-600/10 text-indigo-400 border-indigo-500/35"
+                            : "text-slate-400 border-white/5 bg-slate-950/20 hover:text-slate-200"
+                        }`}
+                      >
+                        <span className="text-xs truncate font-bold font-sans text-slate-200">{opt}</span>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-black text-white">{pct}%</span>
+                          <span className="text-[10px] text-slate-500">{(prices[idx] || 0.0).toFixed(2)} T</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
-                <div className="space-y-1 text-right">
-                  <span className="text-slate-400 text-xs font-semibold">NO Share Price</span>
-                  <div className="text-xl font-black text-red-400 flex items-center gap-1 justify-end">
-                    {pool.noPrice.toFixed(2)} T
-                    <span className="text-xs font-bold bg-red-500/10 px-2 py-0.5 rounded">
-                      {noPercent}%
-                    </span>
-                  </div>
+                {/* Selected Option chart display */}
+                <div className="pt-2">
+                  <LineChart points={chartPoints} label={outcomes[outcomeIndex]} />
                 </div>
               </div>
 
-              {/* Progress representation */}
-              <div className="h-3.5 w-full overflow-hidden rounded-full bg-slate-950 flex border border-white/5">
-                <div
-                  style={{ width: `${yesPercent}%` }}
-                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
-                />
-                <div
-                  style={{ width: `${noPercent}%` }}
-                  className="h-full bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500"
-                />
+              {/* Creator info */}
+              <div className="flex items-center gap-3 border-t border-white/5 pt-6 text-xs text-slate-400">
+                <span>Created by:</span>
+                <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
+                  <img
+                    src={market.creator.avatar_url}
+                    alt={market.creator.username}
+                    className="h-5 w-5 rounded-full object-cover bg-slate-800"
+                  />
+                  <span>{market.creator.username}</span>
+                </div>
+                <span className="text-slate-600">|</span>
+                <span>LMSR Liquidity parameter b: {bVal}</span>
               </div>
-
-              {/* Dynamic SVG Price Chart */}
-              <div className="pt-2">
-                <LineChart points={chartPoints} />
-              </div>
-            </div>
-
-            {/* Creator info */}
-            <div className="flex items-center gap-3 border-t border-white/5 pt-6 text-xs text-slate-400">
-              <span>Created by:</span>
-              <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
-                <img
-                  src={market.creator.avatar_url}
-                  alt={market.creator.username}
-                  className="h-5 w-5 rounded-full object-cover bg-slate-800"
-                />
-                <span>{market.creator.username}</span>
-              </div>
-              <span className="text-slate-600">|</span>
-              <span>Pool liquidity reserves: {Number(pool.yes_shares).toFixed(0)} YES / {Number(pool.no_shares).toFixed(0)} NO</span>
             </div>
           </div>
-        </div>
 
           {/* User Holdings Position Card */}
           <div className="glass-panel rounded-2xl p-6 space-y-4">
@@ -526,40 +498,32 @@ export default function MarketDetailClient({
             </h2>
 
             {/* Position Display */}
-            {(!position || (position.yes_shares === 0 && position.no_shares === 0)) ? (
+            {!userHasPositions ? (
               <div className="rounded-xl border border-white/5 bg-slate-950/20 p-6 text-center text-slate-500 text-xs">
                 You do not hold any shares in this market. Use the trade panel to buy shares!
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="rounded-xl border border-white/5 bg-slate-950/40 p-4 flex items-center justify-between">
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-slate-400">YES Shares</div>
-                    <div className="text-lg font-black font-mono text-emerald-400">
-                      {Number(position.yes_shares).toFixed(4)}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {outcomes.map((opt: string, idx: number) => {
+                  const shares = Number(position?.shares?.[idx] || 0);
+                  if (shares <= 0) return null;
+                  return (
+                    <div key={opt} className="rounded-xl border border-white/5 bg-slate-950/40 p-4 flex items-center justify-between font-mono">
+                      <div className="space-y-1">
+                        <div className="text-[10px] uppercase font-bold text-indigo-400 truncate max-w-[100px] font-sans">{opt}</div>
+                        <div className="text-base font-black text-slate-100">
+                          {shares.toFixed(2)}
+                        </div>
+                      </div>
+                      <span className="text-[9px] text-slate-500">shares</span>
                     </div>
-                  </div>
-                  <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded">
-                    YES
-                  </span>
-                </div>
-
-                <div className="rounded-xl border border-white/5 bg-slate-950/40 p-4 flex items-center justify-between">
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold text-slate-400">NO Shares</div>
-                    <div className="text-lg font-black font-mono text-red-400">
-                      {Number(position.no_shares).toFixed(4)}
-                    </div>
-                  </div>
-                  <span className="text-[10px] bg-red-500/10 border border-red-500/20 text-red-400 font-bold px-2 py-0.5 rounded">
-                    NO
-                  </span>
-                </div>
+                  );
+                })}
               </div>
             )}
 
             {/* Redeem Interface (If Resolved) */}
-            {!isMarketActive && position && (Number(position.yes_shares) > 0 || Number(position.no_shares) > 0) && (
+            {!isMarketActive && userHasPositions && (
               <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div className="space-y-1">
                   <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
@@ -568,7 +532,7 @@ export default function MarketDetailClient({
                   </h4>
                   <p className="text-xs text-slate-300">
                     This market has resolved as <strong>{market.outcome}</strong>. 
-                    Redeem your winning positions for 1 Token per share. Losing shares resolution is 0.
+                    Redeem your winning positions for 1 Token per share. Losing shares are valued at 0.
                   </p>
                 </div>
                 <button
@@ -606,8 +570,27 @@ export default function MarketDetailClient({
                   </thead>
                   <tbody className="divide-y divide-white/5">
                     {transactions.slice().reverse().slice(0, 5).map((tx) => {
-                      const isBuy = tx.type.startsWith("buy");
-                      const isYes = tx.type.endsWith("yes");
+                      let actionLabel = tx.type.toUpperCase();
+                      let optionName = "";
+
+                      if (tx.type === "buy" || tx.type === "sell") {
+                        actionLabel = tx.type.toUpperCase();
+                        optionName = tx.outcome_index !== undefined && tx.outcome_index !== null ? outcomes[tx.outcome_index] : "";
+                      } else if (tx.type === "buy_yes") {
+                        actionLabel = "BUY";
+                        optionName = "YES";
+                      } else if (tx.type === "buy_no") {
+                        actionLabel = "BUY";
+                        optionName = "NO";
+                      } else if (tx.type === "sell_yes") {
+                        actionLabel = "SELL";
+                        optionName = "YES";
+                      } else if (tx.type === "sell_no") {
+                        actionLabel = "SELL";
+                        optionName = "NO";
+                      } else {
+                        actionLabel = tx.type === "resolve_claim" ? "CLAIM" : tx.type.toUpperCase();
+                      }
                       
                       return (
                         <tr key={tx.id} className="text-slate-300 font-mono">
@@ -621,11 +604,11 @@ export default function MarketDetailClient({
                           </td>
                           <td className="py-3">
                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              isBuy 
+                              actionLabel === "BUY" 
                                 ? "bg-indigo-500/10 text-indigo-400" 
                                 : "bg-orange-500/10 text-orange-400"
                             }`}>
-                              {isBuy ? "BUY" : "SELL"} {isYes ? "YES" : "NO"}
+                              {actionLabel} {optionName ? `"${optionName}"` : ""}
                             </span>
                           </td>
                           <td className="py-3">
@@ -657,42 +640,38 @@ export default function MarketDetailClient({
                   Creator Resolution Dashboard
                 </h2>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  As the creator, you are responsible for resolving this market truthfully according to the resolution details. 
-                  Once resolved, winning shares convert 1:1 into Tokens, and the LP reserves will be settled back to your balance.
+                  As the creator or admin, resolve this market according to the true outcome. 
+                  Winning shares resolve 1:1 to Tokens, and the LP reserves will be settled back to your balance.
                 </p>
               </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center gap-4 justify-between border-t border-white/5 pt-4">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setAdminOutcome("YES")}
-                    className={`rounded-xl px-4 py-2.5 text-xs font-bold border transition-all cursor-pointer ${
-                      adminOutcome === "YES"
-                        ? "bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-500/20"
-                        : "text-slate-400 border-white/5 hover:text-white"
-                    }`}
-                  >
-                    Resolve YES
-                  </button>
-                  <button
-                    onClick={() => setAdminOutcome("NO")}
-                    className={`rounded-xl px-4 py-2.5 text-xs font-bold border transition-all cursor-pointer ${
-                      adminOutcome === "NO"
-                        ? "bg-red-500 text-white border-red-400 shadow-lg shadow-red-500/20"
-                        : "text-slate-400 border-white/5 hover:text-white"
-                    }`}
-                  >
-                    Resolve NO
-                  </button>
+              <div className="space-y-4 border-t border-white/5 pt-4">
+                <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Select True Outcome</span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {outcomes.map((opt: string) => (
+                    <button
+                      key={opt}
+                      onClick={() => setAdminOutcome(opt)}
+                      className={`rounded-xl px-3 py-2 text-xs font-bold border transition-all cursor-pointer text-center truncate ${
+                        adminOutcome === opt
+                          ? "bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-500/10"
+                          : "text-slate-400 border-white/5 bg-slate-950 hover:text-white"
+                      }`}
+                    >
+                      {opt}
+                    </button>
+                  ))}
                 </div>
 
-                <button
-                  onClick={handleResolveMarket}
-                  disabled={actionLoading}
-                  className="glow-btn-purple cursor-pointer rounded-xl bg-yellow-600 hover:bg-yellow-500 text-white px-5 py-2.5 text-xs font-bold shadow-lg transition-all"
-                >
-                  {actionLoading ? "Resolving..." : `Confirm Resolution: ${adminOutcome}`}
-                </button>
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleResolveMarket}
+                    disabled={actionLoading}
+                    className="glow-btn-purple cursor-pointer rounded-xl bg-yellow-600 hover:bg-yellow-500 text-white px-5 py-2.5 text-xs font-bold shadow-lg transition-all"
+                  >
+                    {actionLoading ? "Resolving..." : `Confirm Resolution: "${adminOutcome}"`}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -751,44 +730,39 @@ export default function MarketDetailClient({
               </button>
             </div>
 
-            {/* Active Switcher: Outcome (YES vs NO) */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                onClick={() => setOutcome("YES")}
-                disabled={!isMarketActive}
-                className={`rounded-xl py-3 border font-black text-sm transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none ${
-                  outcome === "YES"
-                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 shadow-inner shadow-emerald-500/10"
-                    : "text-slate-400 border-white/5 bg-slate-950/20 hover:text-slate-200"
-                }`}
-              >
-                YES ({(pool.yesPrice * 100).toFixed(0)}%)
-              </button>
-              <button
-                onClick={() => setOutcome("NO")}
-                disabled={!isMarketActive}
-                className={`rounded-xl py-3 border font-black text-sm transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none ${
-                  outcome === "NO"
-                    ? "bg-red-500/10 text-red-400 border-red-500/30 shadow-inner shadow-red-500/10"
-                    : "text-slate-400 border-white/5 bg-slate-950/20 hover:text-slate-200"
-                }`}
-              >
-                NO ({(pool.noPrice * 100).toFixed(0)}%)
-              </button>
+            {/* Active Switcher: Outcome selectors grid */}
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Selected Target Option</span>
+              <div className="grid grid-cols-2 gap-2">
+                {outcomes.map((opt: string, idx: number) => (
+                  <button
+                    key={opt}
+                    onClick={() => setOutcomeIndex(idx)}
+                    disabled={!isMarketActive}
+                    className={`rounded-xl py-2 px-3 border font-black text-xs transition-all cursor-pointer truncate disabled:opacity-50 disabled:pointer-events-none ${
+                      outcomeIndex === idx
+                        ? "bg-indigo-600/10 text-indigo-400 border-indigo-500/30 shadow-inner"
+                        : "text-slate-400 border-white/5 bg-slate-950/20 hover:text-slate-200"
+                    }`}
+                  >
+                    {opt} ({(prices[idx] * 100).toFixed(0)}%)
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Input Field */}
             {isMarketActive ? (
               <form onSubmit={handleTradeSubmit} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label htmlFor="amount" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center justify-between">
                     <span>{tradeType === "buy" ? "Wager Amount" : "Shares to Sell"}</span>
                     <span className="font-mono text-slate-300">
                       {tradeType === "buy"
-                        ? `Bal: ${currentUser.balance.toFixed(1)} Tokens`
-                        : `Owned: ${(outcome === "YES" ? (position?.yes_shares || 0) : (position?.no_shares || 0)).toFixed(1)} shares`}
+                        ? `Bal: ${currentUser.balance.toFixed(1)} T`
+                        : `Owned: ${(position?.shares?.[outcomeIndex] || 0).toFixed(1)} sh`}
                     </span>
-                  </label>
+                  </div>
                   <div className="relative">
                     <input
                       id="amount"
@@ -818,7 +792,7 @@ export default function MarketDetailClient({
                     <div className="rounded-xl bg-slate-950 border border-white/5 p-3.5 space-y-2.5 text-xs text-slate-400 font-mono">
                       <div className="flex justify-between items-center">
                         <span>Net {tradeType === "buy" ? "Wager" : "Payout"}</span>
-                        <span className="text-slate-200">
+                        <span className="text-slate-200 font-bold">
                           {tradeType === "buy" 
                             ? `${previewShares > 0 ? (parseFloat(amountInput) * 0.98).toFixed(2) : "0.00"} Tokens`
                             : `${previewTokens.toFixed(2)} Tokens`}
@@ -827,7 +801,7 @@ export default function MarketDetailClient({
 
                       <div className="flex justify-between items-center">
                         <span>{tradeType === "buy" ? "Estimated Shares" : "Shares Redeemed"}</span>
-                        <span className="text-slate-100 font-bold">
+                        <span className="text-indigo-400 font-bold">
                           {tradeType === "buy"
                             ? `${previewShares.toFixed(4)} shares`
                             : `${parseFloat(amountInput).toFixed(4)} shares`}
@@ -860,17 +834,13 @@ export default function MarketDetailClient({
                 <button
                   type="submit"
                   disabled={actionLoading || !amountInput || !!previewError}
-                  className={`glow-btn-purple w-full rounded-xl py-3.5 text-sm font-bold text-white shadow-lg transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none ${
-                    outcome === "YES"
-                      ? "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/10"
-                      : "bg-red-600 hover:bg-red-500 shadow-red-600/10"
-                  }`}
+                  className="glow-btn-purple w-full rounded-xl py-3.5 text-sm font-bold text-white shadow-lg bg-indigo-600 hover:bg-indigo-500 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
                 >
                   {actionLoading
                     ? "Transacting..."
                     : tradeType === "buy"
-                    ? `Buy YES shares`
-                    : `Sell YES shares`}
+                    ? `Buy "${outcomes[outcomeIndex]}" shares`
+                    : `Sell "${outcomes[outcomeIndex]}" shares`}
                 </button>
               </form>
             ) : (
@@ -886,10 +856,10 @@ export default function MarketDetailClient({
 
           {/* Helper details */}
           <div className="rounded-xl border border-white/5 bg-slate-950/20 p-4 space-y-2 text-xs text-slate-400 leading-relaxed font-normal">
-            <h4 className="font-bold text-white uppercase tracking-wider text-[10px]">Trading instructions</h4>
+            <h4 className="font-bold text-white uppercase tracking-wider text-[10px]">LMSR instructions</h4>
             <p>
-              Prices range from 0.01 to 0.99 tokens. The share price equates to the current probability. 
-              Buying NO shares increases NO probability, and vice versa. 2% trade fees are allocated to the market creator.
+              The share price equates to the current probability. Wagers dynamically shift prices across all options to preserve a 100% total sum. 
+              2% trade fees are allocated to the market creator.
             </p>
           </div>
         </div>

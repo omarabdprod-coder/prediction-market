@@ -1,6 +1,8 @@
 /**
  * AMM Math Utilities for Prediction Market
- * CPMM: x * y = k, where x is YES shares and y is NO shares in the pool.
+ * Includes:
+ * 1. Legacy CPMM: x * y = k, where x is YES shares and y is NO shares in the pool.
+ * 2. LMSR (Logarithmic Market Scoring Rule) for Mutually Exclusive Multi-Outcome markets.
  */
 
 export interface TradeResult {
@@ -37,9 +39,6 @@ export function getNoPrice(poolYes: number, poolNo: number): number {
 
 /**
  * Calculate the result of buying YES shares with tokens.
- * @param tokens Amount of tokens wagered by the user (gross, before 2% fee)
- * @param poolYes Current YES shares in the pool (x)
- * @param poolNo Current NO shares in the pool (y)
  */
 export function calculateBuyYes(
   tokens: number,
@@ -53,12 +52,8 @@ export function calculateBuyYes(
   const netWager = tokens - fee;
   const k = poolYes * poolNo;
 
-  // Pool adds netWager to No shares (y' = y + netWager)
   const newPoolNo = poolNo + netWager;
-  // Pool reduces Yes shares to maintain k (x' = k / y')
   const newPoolYes = k / newPoolNo;
-
-  // Shares user receives: S_yes = netWager + (x - x')
   const shares = netWager + (poolYes - newPoolYes);
 
   const priceBefore = getYesPrice(poolYes, poolNo);
@@ -81,9 +76,6 @@ export function calculateBuyYes(
 
 /**
  * Calculate the result of buying NO shares with tokens.
- * @param tokens Amount of tokens wagered by the user (gross, before 2% fee)
- * @param poolYes Current YES shares in the pool (x)
- * @param poolNo Current NO shares in the pool (y)
  */
 export function calculateBuyNo(
   tokens: number,
@@ -97,12 +89,8 @@ export function calculateBuyNo(
   const netWager = tokens - fee;
   const k = poolYes * poolNo;
 
-  // Pool adds netWager to Yes shares (x' = x + netWager)
   const newPoolYes = poolYes + netWager;
-  // Pool reduces No shares to maintain k (y' = k / x')
   const newPoolNo = k / newPoolYes;
-
-  // Shares user receives: S_no = netWager + (y - y')
   const shares = netWager + (poolNo - newPoolNo);
 
   const priceBefore = getNoPrice(poolYes, poolNo);
@@ -125,9 +113,6 @@ export function calculateBuyNo(
 
 /**
  * Calculate the result of selling YES shares for tokens.
- * @param shares Number of YES shares the user wants to sell (S)
- * @param poolYes Current YES shares in the pool (x)
- * @param poolNo Current NO shares in the pool (y)
  */
 export function calculateSellYes(
   shares: number,
@@ -140,8 +125,6 @@ export function calculateSellYes(
   const k = poolYes * poolNo;
   const L = shares + poolYes;
 
-  // Solve quadratic equation: T^2 - (L + y)T + (L*y - k) = 0
-  // Note: L*y - k = (shares + x)*y - x*y = shares * y
   const a = 1;
   const b = -(L + poolNo);
   const c = shares * poolNo;
@@ -151,10 +134,7 @@ export function calculateSellYes(
     throw new Error("Invalid pool math: discriminant is negative");
   }
 
-  // The smaller root is the correct token payout
   const grossTokens = (-b - Math.sqrt(d)) / (2 * a);
-
-  // Verification check: cannot extract more than the pool's entire NO balance
   if (grossTokens >= poolNo) {
     throw new Error("Insufficient pool liquidity for a sell of this size");
   }
@@ -185,9 +165,6 @@ export function calculateSellYes(
 
 /**
  * Calculate the result of selling NO shares for tokens.
- * @param shares Number of NO shares the user wants to sell (S)
- * @param poolYes Current YES shares in the pool (x)
- * @param poolNo Current NO shares in the pool (y)
  */
 export function calculateSellNo(
   shares: number,
@@ -200,8 +177,6 @@ export function calculateSellNo(
   const k = poolYes * poolNo;
   const L = shares + poolNo;
 
-  // Solve quadratic equation: T^2 - (L + x)T + (L*x - k) = 0
-  // Note: L*x - k = (shares + y)*x - x*y = shares * x
   const a = 1;
   const b = -(L + poolYes);
   const c = shares * poolYes;
@@ -211,10 +186,7 @@ export function calculateSellNo(
     throw new Error("Invalid pool math: discriminant is negative");
   }
 
-  // The smaller root is the correct token payout
   const grossTokens = (-b - Math.sqrt(d)) / (2 * a);
-
-  // Verification check: cannot extract more than the pool's entire YES balance
   if (grossTokens >= poolYes) {
     throw new Error("Insufficient pool liquidity for a sell of this size");
   }
@@ -240,5 +212,133 @@ export function calculateSellNo(
     slippage,
     newPoolYes,
     newPoolNo,
+  };
+}
+
+// ==========================================
+// LMSR (LOGARITHMIC MARKET SCORING RULE)
+// ==========================================
+
+export interface LmsrTradeResult {
+  shares: number;
+  tokens: number;
+  fee: number;
+  priceBefore: number;
+  priceAfter: number;
+  avgPrice: number;
+  slippage: number;
+  newQ: number[];
+}
+
+/**
+ * Calculates LMSR cost C(q) = b * ln( sum( exp(qi/b) ) )
+ */
+export function lmsrCost(q: number[], b: number): number {
+  const maxQ = Math.max(...q);
+  const sumExp = q.reduce((sum, qi) => sum + Math.exp((qi - maxQ) / b), 0);
+  return maxQ + b * Math.log(sumExp);
+}
+
+/**
+ * Calculates marginal prices (probabilities) for all outcomes.
+ */
+export function lmsrPrices(q: number[], b: number): number[] {
+  const maxQ = Math.max(...q);
+  const exps = q.map((qi) => Math.exp((qi - maxQ) / b));
+  const sumExp = exps.reduce((sum, e) => sum + e, 0);
+  return exps.map((e) => e / sumExp);
+}
+
+/**
+ * Calculates the result of buying shares of outcome index.
+ */
+export function calculateBuyLmsr(
+  wager: number,
+  q: number[],
+  outcomeIndex: number,
+  b: number
+): LmsrTradeResult {
+  if (wager <= 0) throw new Error("Wager amount must be positive");
+  const fee = wager * 0.02;
+  const netWager = wager - fee;
+
+  const currentCost = lmsrCost(q, b);
+  const targetCost = currentCost + netWager;
+
+  const maxQ = Math.max(...q);
+  const sumExpOthers = q.reduce((sum, qk, idx) => {
+    if (idx === outcomeIndex) return sum;
+    return sum + Math.exp((qk - maxQ) / b);
+  }, 0);
+
+  const diffTarget = (targetCost - maxQ) / b;
+  const termInsideLog = Math.exp(diffTarget) - sumExpOthers;
+
+  if (termInsideLog <= 0) {
+    throw new Error("Math error: Insufficient liquidity for this transaction size");
+  }
+
+  const newQi = maxQ + b * Math.log(termInsideLog);
+  const shares = newQi - q[outcomeIndex];
+
+  const newQ = [...q];
+  newQ[outcomeIndex] = newQi;
+
+  const oldPrices = lmsrPrices(q, b);
+  const newPrices = lmsrPrices(newQ, b);
+
+  const avgPrice = netWager / shares;
+  const slippage = oldPrices[outcomeIndex] > 0 ? (avgPrice - oldPrices[outcomeIndex]) / oldPrices[outcomeIndex] : 0;
+
+  return {
+    shares,
+    tokens: netWager,
+    fee,
+    priceBefore: oldPrices[outcomeIndex],
+    priceAfter: newPrices[outcomeIndex],
+    avgPrice,
+    slippage: Math.max(0, slippage),
+    newQ,
+  };
+}
+
+/**
+ * Calculates the result of selling shares of outcome index.
+ */
+export function calculateSellLmsr(
+  shares: number,
+  q: number[],
+  outcomeIndex: number,
+  b: number
+): LmsrTradeResult {
+  if (shares <= 0) throw new Error("Shares to sell must be positive");
+  if (shares > q[outcomeIndex]) {
+    throw new Error("Cannot sell more shares than outstanding in the pool");
+  }
+
+  const currentCost = lmsrCost(q, b);
+  const newQ = [...q];
+  newQ[outcomeIndex] = q[outcomeIndex] - shares;
+
+  const targetCost = lmsrCost(newQ, b);
+  const grossTokens = currentCost - targetCost;
+
+  const fee = grossTokens * 0.02;
+  const tokens = grossTokens - fee;
+
+  const oldPrices = lmsrPrices(q, b);
+  const newPrices = lmsrPrices(newQ, b);
+  const avgPrice = tokens / shares;
+  const slippage = oldPrices[outcomeIndex] > 0 ? (oldPrices[outcomeIndex] - avgPrice) / oldPrices[outcomeIndex] : 0;
+
+  return {
+    shares,
+    tokens,
+    fee,
+    priceBefore: oldPrices[outcomeIndex],
+    priceAfter: newPrices[outcomeIndex],
+    avgPrice,
+    slippage: Math.max(0, slippage),
+    newQ,
   };
 }
