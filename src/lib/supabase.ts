@@ -664,6 +664,10 @@ export async function fetchMarketDetails(marketId: string) {
 
 export async function fetchUserPositions(userId: string) {
   if (!isMockMode && supabase) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(userId)) {
+      return [];
+    }
     const { data, error } = await supabase
       .from("user_positions")
       .select("*, market:markets(*)")
@@ -683,6 +687,10 @@ export async function fetchUserPositions(userId: string) {
 
 export async function fetchUser(userId: string): Promise<UserProfile | null> {
   if (!isMockMode && supabase) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(userId)) {
+      return null;
+    }
     const { data, error } = await supabase
       .from("users")
       .select("*")
@@ -740,6 +748,14 @@ export async function getServerUser(): Promise<UserProfile | null> {
   const cookieStore = await cookies();
   const persona = cookieStore.get("persona")?.value;
   if (!persona) return null;
+
+  if (!isMockMode) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(persona)) {
+      return null;
+    }
+  }
+
   const user = await fetchUser(persona);
   return user || null;
 }
