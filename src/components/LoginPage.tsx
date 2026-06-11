@@ -1,17 +1,52 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { authenticateAction } from "@/app/actions";
-import { ShieldAlert, LogIn, Info, User } from "lucide-react";
+import { ShieldAlert, Info, User, LogIn } from "lucide-react";
+import { UserProfile } from "@/lib/supabase";
 
 interface LoginPageProps {
-  allUsers: any[];
+  allUsers?: UserProfile[];
 }
 
-export default function LoginPage({ allUsers }: LoginPageProps) {
+export default function LoginPage({ allUsers = [] }: LoginPageProps) {
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDev, setIsDev] = useState(false);
+  const [logoClicks, setLogoClicks] = useState(0);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      const devParam = searchParams.get("dev");
+      
+      if (devParam === "true") {
+        localStorage.setItem("dev_mode", "true");
+        setIsDev(true);
+      } else if (devParam === "false") {
+        localStorage.setItem("dev_mode", "false");
+        setIsDev(false);
+      } else {
+        const storedDev = localStorage.getItem("dev_mode");
+        if (storedDev === "true") {
+          setIsDev(true);
+        }
+      }
+    }
+  }, []);
+
+  const handleLogoClick = () => {
+    const nextClicks = logoClicks + 1;
+    setLogoClicks(nextClicks);
+    if (nextClicks >= 5) {
+      const newDevState = !isDev;
+      setIsDev(newDevState);
+      localStorage.setItem("dev_mode", newDevState ? "true" : "false");
+      setLogoClicks(0);
+      alert(`Developer Mode ${newDevState ? "ENABLED" : "DISABLED"}`);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,8 +86,12 @@ export default function LoginPage({ allUsers }: LoginPageProps) {
       <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl p-6 sm:p-8 space-y-6 animate-in fade-in duration-300">
         
         {/* Brand Logo */}
-        <div className="flex flex-col items-center text-center space-y-2">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-white font-black text-2xl shadow-lg shadow-indigo-600/30">
+        <div 
+          onClick={handleLogoClick}
+          className="flex flex-col items-center text-center space-y-2 cursor-pointer select-none group"
+          title="Click 5 times to toggle developer options"
+        >
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-white font-black text-2xl shadow-lg shadow-indigo-600/30 group-hover:scale-105 transition-transform duration-200">
             P
           </div>
           <h1 className="text-xl font-black text-white tracking-tight">TTSOPP MARKETS</h1>
@@ -105,12 +144,12 @@ export default function LoginPage({ allUsers }: LoginPageProps) {
           </button>
         </form>
 
-        {/* Quick Simulation Profiles (Mock Accounts Drawer) */}
-        {allUsers.length > 0 && (
-          <div className="border-t border-white/5 pt-5 space-y-3">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-              <LogIn className="h-3.5 w-3.5 text-indigo-400" />
-              Quick Swap Personas
+        {/* Hidden Developer Quick Switcher */}
+        {isDev && allUsers.length > 0 && (
+          <div className="border-t border-white/10 pt-5 space-y-3 animate-in slide-in-from-top-4 duration-300">
+            <div className="text-[10px] font-bold text-amber-400 uppercase tracking-widest flex items-center gap-1.5">
+              <LogIn className="h-3.5 w-3.5" />
+              Developer Swap Personas
             </div>
             <div className="grid grid-cols-2 gap-2">
               {allUsers.map((user) => (
@@ -119,12 +158,12 @@ export default function LoginPage({ allUsers }: LoginPageProps) {
                    type="button"
                    onClick={() => handleQuickLogin(user.username.split(" ")[0])}
                    disabled={loading}
-                   className="flex items-center gap-2 rounded-xl border border-white/5 bg-slate-950/40 px-3 py-2 text-left text-xs text-slate-300 hover:bg-white/5 transition-all cursor-pointer disabled:opacity-50"
+                   className="flex items-center gap-2 rounded-xl border border-amber-500/10 bg-slate-950/60 px-3 py-2 text-left text-xs text-slate-300 hover:bg-amber-500/5 hover:border-amber-500/30 transition-all cursor-pointer disabled:opacity-50"
                 >
                   <img
                     src={user.avatar_url}
                     alt={user.username}
-                    className="h-5 w-5 rounded-full object-cover bg-slate-800 shrink-0"
+                    className="h-5 w-5 rounded-full object-cover bg-slate-800 shrink-0 border border-amber-500/20"
                   />
                   <span className="truncate">{user.username.split(" ")[0]}</span>
                 </button>

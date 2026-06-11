@@ -10,7 +10,7 @@ export default async function DashboardPage() {
   // 1. Fetch current server-simulated user based on cookie
   const currentUser = await getServerUser();
 
-  // 2. Fetch all users for the persona switcher
+  // 2. Fetch all users for the leaderboard
   const allUsers = await fetchAllUsers();
 
   if (!currentUser) {
@@ -28,7 +28,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground">
-      {/* Navbar with User Stats & Selector */}
+      {/* Navbar with User Stats */}
       <Navbar currentUser={currentUser} allUsers={allUsers} />
 
       {/* Main Dashboard Panel */}

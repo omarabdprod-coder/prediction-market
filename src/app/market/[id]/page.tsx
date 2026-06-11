@@ -21,7 +21,7 @@ export default async function MarketDetailPage({ params }: PageProps) {
   // 1. Await parameters to get market ID
   const { id: marketId } = await params;
 
-  // 2. Fetch active session user and switcher accounts
+  // 2. Fetch active session user
   const currentUser = await getServerUser();
   const allUsers = await fetchAllUsers();
 
