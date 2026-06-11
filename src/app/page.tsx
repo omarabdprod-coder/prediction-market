@@ -2,6 +2,7 @@ import React from "react";
 import Navbar from "@/components/Navbar";
 import DashboardClient from "@/components/DashboardClient";
 import LoginPage from "@/components/LoginPage";
+import OddsTicker from "@/components/OddsTicker";
 import { getServerUser, fetchAllUsers, fetchMarkets, fetchUserPositions, fetchGlobalTransactions } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function DashboardPage() {
   const globalTransactions = await fetchGlobalTransactions();
 
   return (
-    <div className="flex flex-col min-h-screen bg-background text-foreground">
+    <div className="flex flex-col min-h-screen bg-background text-foreground pb-12">
       {/* Navbar with User Stats */}
       <Navbar currentUser={currentUser} allUsers={allUsers} />
 
@@ -48,6 +49,9 @@ export default async function DashboardPage() {
           &copy; {new Date().getFullYear()} TTSOPP Prediction Markets. Private Discord Community Sandbox.
         </div>
       </footer>
+
+      {/* Live scrolling odds ticker */}
+      <OddsTicker markets={markets} />
     </div>
   );
 }

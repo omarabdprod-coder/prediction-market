@@ -397,13 +397,13 @@ export default function MarketDetailClient({
           {/* Main Info Card */}
           <div className="glass-panel rounded-2xl overflow-hidden bg-slate-900 border border-white/5 shadow-2xl">
             {/* Header Cover Image */}
-            <div className="h-48 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
+            <div className="h-60 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
               <img
                 src={market.image_url || "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800&auto=format&fit=crop&q=60"}
                 alt={market.question}
-                className="h-full w-full object-cover opacity-60"
+                className="h-full w-full object-cover opacity-90 hover:opacity-100 transition-all duration-300"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent opacity-90" />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 to-transparent" />
             </div>
 
             <div className="p-6 sm:p-8 space-y-6">

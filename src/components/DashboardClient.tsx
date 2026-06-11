@@ -195,13 +195,13 @@ export default function DashboardClient({
                     className="glass-panel glass-panel-hover flex flex-col justify-between rounded-2xl overflow-hidden border border-white/5 bg-slate-900 shadow-lg hover:border-indigo-500/20 transition-all duration-300"
                   >
                     {/* Cover Image banner */}
-                    <div className="h-28 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
+                    <div className="h-36 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
                       <img
                         src={market.image_url || "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=500&auto=format&fit=crop&q=60"}
                         alt={market.question}
-                        className="h-full w-full object-cover opacity-60 hover:scale-105 transition-transform duration-500"
+                        className="h-full w-full object-cover opacity-90 hover:opacity-100 hover:scale-105 transition-all duration-500"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent opacity-90" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 to-transparent" />
                     </div>
 
                     <div className="p-5 flex flex-col justify-between flex-1 space-y-4">
