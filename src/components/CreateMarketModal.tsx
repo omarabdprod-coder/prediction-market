@@ -34,14 +34,38 @@ export default function CreateMarketModal({
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
   const [resolutionDate, setResolutionDate] = useState("");
-  const [imageOption, setImageOption] = useState<"preset" | "custom">("preset");
+  const [imageOption, setImageOption] = useState<"preset" | "custom" | "file">("preset");
   const [selectedPresetUrl, setSelectedPresetUrl] = useState(PRESET_IMAGES[0].url);
   const [customImageUrl, setCustomImageUrl] = useState("");
+  const [fileBase64, setFileBase64] = useState("");
+  const [fileError, setFileError] = useState<string | null>(null);
   const [taggedUsers, setTaggedUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFileError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      setFileError("File size exceeds 2MB. Choose a smaller image.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setFileBase64(reader.result);
+      }
+    };
+    reader.onerror = () => {
+      setFileError("Error reading image file.");
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handlePlayerToggle = (player: string) => {
     if (taggedUsers.includes(player)) {
@@ -61,7 +85,12 @@ export default function CreateMarketModal({
     setLoading(true);
     setError(null);
 
-    const imageUrl = imageOption === "preset" ? selectedPresetUrl : customImageUrl.trim();
+    const imageUrl = 
+      imageOption === "preset" 
+        ? selectedPresetUrl 
+        : imageOption === "custom" 
+          ? customImageUrl.trim() 
+          : fileBase64;
 
     const res = await createMarketAction(
       question,
@@ -82,6 +111,8 @@ export default function CreateMarketModal({
       setImageOption("preset");
       setSelectedPresetUrl(PRESET_IMAGES[0].url);
       setCustomImageUrl("");
+      setFileBase64("");
+      setFileError(null);
       setTaggedUsers([]);
       onClose();
     } else {
@@ -89,7 +120,12 @@ export default function CreateMarketModal({
     }
   };
 
-  const currentImageUrl = imageOption === "preset" ? selectedPresetUrl : customImageUrl.trim();
+  const currentImageUrl = 
+    imageOption === "preset" 
+      ? selectedPresetUrl 
+      : imageOption === "custom" 
+        ? customImageUrl.trim() 
+        : fileBase64;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -180,7 +216,16 @@ export default function CreateMarketModal({
                   imageOption === "custom" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Custom URL
+                URL Link
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageOption("file")}
+                className={`flex-1 rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                  imageOption === "file" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Upload Photo
               </button>
             </div>
 
@@ -202,7 +247,7 @@ export default function CreateMarketModal({
                   </button>
                 ))}
               </div>
-            ) : (
+            ) : imageOption === "custom" ? (
               <input
                 type="url"
                 placeholder="Paste direct image link (e.g. https://...jpg)"
@@ -210,6 +255,18 @@ export default function CreateMarketModal({
                 onChange={(e) => setCustomImageUrl(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
               />
+            ) : (
+              <div className="space-y-1.5">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-indigo-600/20 file:text-indigo-400 hover:file:bg-indigo-600/30 file:cursor-pointer"
+                />
+                {fileError && (
+                  <div className="text-[10px] text-red-400 font-semibold">{fileError}</div>
+                )}
+              </div>
             )}
 
             {/* Image Preview thumbnail */}

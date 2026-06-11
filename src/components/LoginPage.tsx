@@ -53,11 +53,11 @@ export default function LoginPage({ allUsers }: LoginPageProps) {
         {/* Brand Logo */}
         <div className="flex flex-col items-center text-center space-y-2">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-white font-black text-2xl shadow-lg shadow-indigo-600/30">
-            Λ
+            P
           </div>
-          <h1 className="text-xl font-black text-white tracking-tight">ANTIGRAVITY MARKETS</h1>
+          <h1 className="text-xl font-black text-white tracking-tight">TTSOPP MARKETS</h1>
           <p className="text-xs text-slate-400">
-            Private Predictions League & AMM Simulation
+            The True Saga of Paul Pogchamp Prediction League
           </p>
         </div>
 

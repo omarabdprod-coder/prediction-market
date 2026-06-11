@@ -756,6 +756,36 @@ export async function fetchMarketTransactions(marketId: string) {
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 }
 
+export async function fetchGlobalTransactions() {
+  if (!isMockMode && supabase) {
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("*, user:users(*), market:markets(*)")
+      .order("created_at", { ascending: false })
+      .limit(5);
+    if (error) throw error;
+    return data || [];
+  }
+
+  return mockDb.transactions
+    .map((tx) => ({
+      ...tx,
+      user: mockDb.users.get(tx.user_id) || {
+        id: tx.user_id,
+        username: "User",
+        avatar_url: `https://api.dicebear.com/7.x/adventurer/svg?seed=${tx.user_id}`,
+        balance: 0,
+        created_at: "",
+      },
+      market: mockDb.markets.get(tx.market_id) || {
+        id: tx.market_id,
+        question: "Unknown Market",
+      }
+    }))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5);
+}
+
 export async function getServerUser(): Promise<UserProfile | null> {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();

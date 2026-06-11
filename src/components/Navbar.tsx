@@ -27,9 +27,9 @@ export default function Navbar({ currentUser, allUsers }: NavbarProps) {
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2 font-sans font-black tracking-tight text-xl text-white">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20">
-              Λ
+              P
             </span>
-            <span>ANTIGRAVITY</span>
+            <span>TTSOPP</span>
             <span className="text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full font-semibold">
               MARKETS
             </span>

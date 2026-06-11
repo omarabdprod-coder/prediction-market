@@ -68,7 +68,7 @@ export default async function MarketDetailPage({ params }: PageProps) {
       {/* Global Footer */}
       <footer className="w-full border-t border-white/5 py-4 text-center text-xs text-slate-500 bg-slate-950/20">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          &copy; {new Date().getFullYear()} Antigravity Prediction Markets. Private Discord Community Sandbox.
+          &copy; {new Date().getFullYear()} TTSOPP Prediction Markets. Private Discord Community Sandbox.
         </div>
       </footer>
     </div>

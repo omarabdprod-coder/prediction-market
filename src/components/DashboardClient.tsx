@@ -4,13 +4,14 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { Market, UserProfile, UserPosition } from "@/lib/supabase";
 import CreateMarketModal from "./CreateMarketModal";
-import { Search, Compass, Clock, Award, ShieldAlert, ChevronRight, TrendingUp, Info } from "lucide-react";
+import { Search, Compass, Clock, Award, ShieldAlert, ChevronRight, TrendingUp, Info, Trophy, Activity } from "lucide-react";
 
 interface DashboardClientProps {
   currentUser: UserProfile;
   allUsers: UserProfile[];
   markets: Market[];
   positions: any[];
+  globalTransactions?: any[];
 }
 
 export default function DashboardClient({
@@ -18,6 +19,7 @@ export default function DashboardClient({
   allUsers,
   markets,
   positions,
+  globalTransactions = [],
 }: DashboardClientProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTab, setFilterTab] = useState<"active" | "resolved" | "all">("active");
@@ -73,11 +75,11 @@ export default function DashboardClient({
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div className="space-y-2">
             <h1 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">
-              Discord Prediction Market
+              The True Saga of Paul Pogchamp
             </h1>
             <p className="max-w-xl text-sm leading-relaxed text-slate-400">
               Welcome back, <span className="text-indigo-400 font-semibold">{currentUser.username}</span>. 
-              Wager your tokens, trade live probabilities, and resolve community forecasts.
+              Trade live event probabilities, resolve forecasts, and top the community leaderboard.
             </p>
           </div>
           <button
@@ -322,15 +324,102 @@ export default function DashboardClient({
             )}
           </div>
 
+          {/* Leaderboard Card */}
+          <div className="glass-panel rounded-2xl p-5 space-y-4">
+            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-indigo-400" />
+              Leaderboard
+            </h2>
+            <div className="space-y-2.5">
+              {[...allUsers]
+                .sort((a, b) => b.balance - a.balance)
+                .slice(0, 5)
+                .map((user, idx) => {
+                  const ranks = ["🥇", "🥈", "🥉", "4th", "5th"];
+                  return (
+                    <div key={user.id} className="flex items-center justify-between rounded-xl bg-slate-950/30 border border-white/5 px-3 py-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-sans font-bold text-slate-400 w-6">
+                          {ranks[idx]}
+                        </span>
+                        <img
+                          src={user.avatar_url}
+                          alt={user.username}
+                          className="h-6 w-6 rounded-full object-cover bg-slate-800"
+                        />
+                        <span className="font-semibold text-slate-200 truncate max-w-[100px]">
+                          {user.username}
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-slate-100">
+                        {user.balance.toFixed(0)} T
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* Recent Global Trades Feed */}
+          <div className="glass-panel rounded-2xl p-5 space-y-4">
+            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <Activity className="h-4 w-4 text-indigo-400" />
+              Live Community Bets
+            </h2>
+            {globalTransactions.length === 0 ? (
+              <div className="rounded-xl border border-white/5 bg-slate-950/20 p-4 text-center text-slate-500 text-xs">
+                No trade activity recorded yet.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {globalTransactions.map((tx) => {
+                  const isBuy = tx.type.startsWith("buy");
+                  const isYes = tx.type.endsWith("yes");
+                  return (
+                    <div key={tx.id} className="rounded-xl bg-slate-950/30 border border-white/5 p-3 text-xs space-y-1.5 font-mono">
+                      <div className="flex justify-between items-center text-slate-400 font-sans">
+                        <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                          <img
+                            src={tx.user.avatar_url}
+                            alt={tx.user.username}
+                            className="h-4 w-4 rounded-full object-cover bg-slate-800"
+                          />
+                          <span className="truncate max-w-[90px]">{tx.user.username.split(" ")[0]}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500">
+                          {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      
+                      <div className="text-[11px] text-slate-300 leading-snug">
+                        <span className={`px-1 rounded text-[9px] font-bold mr-1 ${
+                          isBuy ? "bg-indigo-500/10 text-indigo-400" : "bg-orange-500/10 text-orange-400"
+                        }`}>
+                          {isBuy ? "BUY" : "SELL"} {isYes ? "YES" : "NO"}
+                        </span>
+                        on <Link href={`/market/${tx.market_id}`} className="text-indigo-400 hover:underline font-bold font-sans inline truncate max-w-[130px]">{tx.market?.question || "Market"}</Link>
+                      </div>
+                      
+                      <div className="text-[10px] text-slate-400 flex justify-between">
+                         <span>Wager: {Number(tx.amount_tokens).toFixed(0)} T</span>
+                         <span>({Number(tx.amount_shares).toFixed(0)} sh)</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Sandbox Info */}
           <div className="glass-panel rounded-2xl p-5 border-l-2 border-l-indigo-500 space-y-3">
             <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
               <Info className="h-4 w-4 text-indigo-400" />
-              Discord Prediction Engine
+              TTSOPP Prediction Engine
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              This is a private sandboxed virtual predictions league. 
-              Toggle different profiles from the persona menu on the navbar to simulate bets, test the slippage calculator, and practice cashing out winning shares.
+              This is a private sandboxed virtual predictions league for The True Saga of Paul Pogchamp. 
+              Toggle different profiles to simulate bets, test the AMM slippage calculator, and resolve forecasts.
             </p>
           </div>
         </div>
