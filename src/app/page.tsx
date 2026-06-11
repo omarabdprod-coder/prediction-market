@@ -3,29 +3,43 @@ import Navbar from "@/components/Navbar";
 import DashboardClient from "@/components/DashboardClient";
 import LoginPage from "@/components/LoginPage";
 import OddsTicker from "@/components/OddsTicker";
-import { getServerUser, fetchAllUsers, fetchMarkets, fetchUserPositions, fetchGlobalTransactions } from "@/lib/supabase";
+import { 
+  getServerUser, 
+  fetchAllUsers, 
+  fetchMarkets, 
+  fetchUserPositions, 
+  fetchGlobalTransactions,
+  fetchShameList
+} from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  // 1. Fetch current server-simulated user based on cookie
-  const currentUser = await getServerUser();
-
-  // 2. Fetch all users for the leaderboard
-  const allUsers = await fetchAllUsers();
+  // 1. Fetch current server-simulated user based on cookie & all users in parallel
+  const [currentUser, allUsers] = await Promise.all([
+    getServerUser(),
+    fetchAllUsers(),
+  ]);
 
   if (!currentUser) {
     return <LoginPage allUsers={allUsers} />;
   }
 
-  // 3. Fetch all active and resolved prediction markets
-  const markets = await fetchMarkets();
+  // 2. Fetch all prediction markets, user positions, transactions, and the shame list in parallel
+  const [markets, positions, globalTransactions, shameList] = await Promise.all([
+    fetchMarkets(),
+    fetchUserPositions(currentUser.id),
+    fetchGlobalTransactions(),
+    fetchShameList(),
+  ]);
 
-  // 4. Fetch the current user's positions
-  const positions = await fetchUserPositions(currentUser.id);
-
-  // 5. Fetch global transactions for dashboard trade feed
-  const globalTransactions = await fetchGlobalTransactions();
+  // 3. Filter out markets where current user is tagged from the scrolling ticker
+  const visibleTickerMarkets = markets.filter((m) => {
+    const isInsider = m.tagged_users?.some((uname: string) => 
+      uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
+    );
+    return !isInsider;
+  });
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground pb-12">
@@ -40,6 +54,7 @@ export default async function DashboardPage() {
           markets={markets}
           positions={positions}
           globalTransactions={globalTransactions}
+          shameList={shameList}
         />
       </main>
 
@@ -51,7 +66,7 @@ export default async function DashboardPage() {
       </footer>
 
       {/* Live scrolling odds ticker */}
-      <OddsTicker markets={markets} />
+      <OddsTicker markets={visibleTickerMarkets} />
     </div>
   );
 }

@@ -777,3 +777,92 @@ export async function fetchAllUsers(): Promise<UserProfile[]> {
 
   return Array.from(mockDb.users.values());
 }
+
+export async function fetchShameList(): Promise<{ id: string; username: string; avatar_url: string; total_lost: number }[]> {
+  if (!isMockMode && supabase) {
+    try {
+      const { data: txs, error } = await supabase
+        .from("transactions")
+        .select(`
+          user_id,
+          amount_tokens,
+          outcome_index,
+          user:users(username, avatar_url),
+          market:markets(status, outcome, outcomes)
+        `)
+        .eq("type", "buy");
+
+      if (error) throw error;
+
+      const shameMap = new Map<string, { username: string; avatar_url: string; total_lost: number }>();
+
+      (txs || []).forEach((tx: any) => {
+        const market = tx.market;
+        if (market && market.status === "resolved") {
+          const outcomes = market.outcomes || ["YES", "NO"];
+          const winningOutcome = market.outcome;
+          const winningIdx = outcomes.findIndex((opt: string) => opt.toLowerCase() === winningOutcome?.toLowerCase());
+          
+          if (winningIdx !== -1 && tx.outcome_index !== winningIdx) {
+            const uId = tx.user_id;
+            const amount = Number(tx.amount_tokens || 0);
+            const user = tx.user;
+            
+            if (shameMap.has(uId)) {
+              shameMap.get(uId)!.total_lost += amount;
+            } else {
+              shameMap.set(uId, {
+                username: user?.username || "Trader",
+                avatar_url: user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${uId}`,
+                total_lost: amount
+              });
+            }
+          }
+        }
+      });
+
+      return Array.from(shameMap.entries())
+        .map(([id, val]) => ({ id, ...val }))
+        .sort((a, b) => b.total_lost - a.total_lost)
+        .slice(0, 5);
+    } catch (e) {
+      console.error("Error in fetchShameList:", e);
+      return [];
+    }
+  }
+
+  // Mock Mode Shame List Calculation
+  const shameMap = new Map<string, { username: string; avatar_url: string; total_lost: number }>();
+  mockDb.transactions.forEach((tx) => {
+    const isBuy = tx.type === "buy";
+    if (isBuy) {
+      const market = mockDb.markets.get(tx.market_id);
+      if (market && market.status === "resolved") {
+        const outcomes = market.outcomes || ["YES", "NO"];
+        const winningOutcome = market.outcome;
+        const winningIdx = outcomes.findIndex((opt: string) => opt.toLowerCase() === winningOutcome?.toLowerCase());
+        
+        if (winningIdx !== -1 && tx.outcome_index !== winningIdx) {
+          const uId = tx.user_id;
+          const amount = tx.amount_tokens;
+          const user = mockDb.users.get(uId);
+          
+          if (shameMap.has(uId)) {
+            shameMap.get(uId)!.total_lost += amount;
+          } else {
+            shameMap.set(uId, {
+              username: user?.username || "Trader",
+              avatar_url: user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${uId}`,
+              total_lost: amount
+            });
+          }
+        }
+      }
+    }
+  });
+
+  return Array.from(shameMap.entries())
+    .map(([id, val]) => ({ id, ...val }))
+    .sort((a, b) => b.total_lost - a.total_lost)
+    .slice(0, 5);
+}

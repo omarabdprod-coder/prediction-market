@@ -23,21 +23,33 @@ export default async function MarketDetailPage({ params }: PageProps) {
   // 1. Await parameters to get market ID
   const { id: marketId } = await params;
 
-  // 2. Fetch active session user
-  const currentUser = await getServerUser();
-  const allUsers = await fetchAllUsers();
+  // 2. Fetch active session user and all users in parallel
+  const [currentUser, allUsers] = await Promise.all([
+    getServerUser(),
+    fetchAllUsers(),
+  ]);
 
   if (!currentUser) {
     return <LoginPage allUsers={allUsers} />;
   }
 
-  // 3. Fetch all active prediction markets for the ticker
-  const markets = await fetchMarkets();
+  let markets: any[] = [];
+  let marketData: any = null;
+  let userPositions: any[] = [];
+  let transactions: any[] = [];
 
-  let marketData;
   try {
-    // 4. Fetch detailed market data and liquidity reserves
-    marketData = await fetchMarketDetails(marketId);
+    // 3. Fetch details, positions, ticker markets, and transactions in parallel
+    const [marketsRes, marketDetailsRes, userPositionsRes, transactionsRes] = await Promise.all([
+      fetchMarkets(),
+      fetchMarketDetails(marketId),
+      fetchUserPositions(currentUser.id),
+      fetchMarketTransactions(marketId),
+    ]);
+    markets = marketsRes;
+    marketData = marketDetailsRes;
+    userPositions = userPositionsRes;
+    transactions = transactionsRes;
   } catch (e) {
     console.error(`Error loading market ${marketId}:`, e);
     return notFound();
@@ -47,12 +59,15 @@ export default async function MarketDetailPage({ params }: PageProps) {
     return notFound();
   }
 
-  // 5. Fetch position for this market
-  const userPositions = await fetchUserPositions(currentUser.id);
   const position = userPositions.find((p) => p.market_id === marketId) || null;
 
-  // 6. Fetch market transactions history for the chart and table
-  const transactions = await fetchMarketTransactions(marketId);
+  // 4. Filter out markets where current user is tagged from the scrolling ticker
+  const visibleTickerMarkets = markets.filter((m) => {
+    const isInsider = m.tagged_users?.some((uname: string) => 
+      uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
+    );
+    return !isInsider;
+  });
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground pb-12">
@@ -78,7 +93,7 @@ export default async function MarketDetailPage({ params }: PageProps) {
       </footer>
 
       {/* Live scrolling odds ticker */}
-      <OddsTicker markets={markets} />
+      <OddsTicker markets={visibleTickerMarkets} />
     </div>
   );
 }

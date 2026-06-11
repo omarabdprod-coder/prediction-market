@@ -29,6 +29,7 @@ import {
   AlertCircle,
   CheckCircle2,
 } from "lucide-react";
+import LiveCountdown from "./LiveCountdown";
 
 interface ChartPoint {
   time: Date;
@@ -439,8 +440,13 @@ export default function MarketDetailClient({
                     Resolved {market.outcome}
                   </span>
                 )}
-                <span className="text-xs text-slate-400">
-                  Resolution Date: <strong>{new Date(market.resolution_date).toLocaleString()}</strong>
+                <span className="text-xs text-slate-400 flex items-center gap-1.5">
+                  Resolution Date:
+                  {isMarketActive ? (
+                    <LiveCountdown dateString={market.resolution_date} />
+                  ) : (
+                    <strong>{new Date(market.resolution_date).toLocaleString()}</strong>
+                  )}
                 </span>
               </div>
 
