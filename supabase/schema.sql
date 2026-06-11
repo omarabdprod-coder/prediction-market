@@ -575,52 +575,30 @@ begin
 end;
 $$ language plpgsql security definer;
 
--- Add password column to public.users table (for credential-based access)
-alter table public.users add column if not exists password text;
-
--- Register User RPC
-create or replace function public.register_user_rpc(
-  p_username text,
-  p_password text
+-- Login or Register User RPC (Password-free)
+create or replace function public.login_or_register_user_rpc(
+  p_username text
 )
 returns uuid as $$
 declare
   v_user_id uuid;
 begin
-  if exists (select 1 from public.users where lower(username) = lower(p_username)) then
-    raise exception 'Username already exists';
-  end if;
-
-  v_user_id := uuid_generate_v4();
-
-  insert into public.users (id, username, password, avatar_url, balance)
-  values (
-    v_user_id,
-    p_username,
-    p_password,
-    'https://api.dicebear.com/7.x/adventurer/svg?seed=' || p_username,
-    1000.00
-  );
-
-  return v_user_id;
-end;
-$$ language plpgsql security definer;
-
--- Login User RPC
-create or replace function public.login_user_rpc(
-  p_username text,
-  p_password text
-)
-returns uuid as $$
-declare
-  v_user_id uuid;
-begin
+  -- Search for existing user (case insensitive)
   select id into v_user_id
   from public.users
-  where lower(username) = lower(p_username) and password = p_password;
+  where lower(username) = lower(trim(p_username));
 
-  if not found then
-    raise exception 'Invalid username or password';
+  -- If not found, create a new user profile with 1000.00 starting balance
+  if v_user_id is null then
+    v_user_id := uuid_generate_v4();
+    
+    insert into public.users (id, username, avatar_url, balance)
+    values (
+      v_user_id,
+      trim(p_username),
+      'https://api.dicebear.com/7.x/adventurer/svg?seed=' || encode(convert_to(trim(p_username), 'UTF8'), 'base64'),
+      1000.00
+    );
   end if;
 
   return v_user_id;

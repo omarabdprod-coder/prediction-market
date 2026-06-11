@@ -216,31 +216,24 @@ export async function dbRpc<T = any>(
   // ==========================================
   try {
     switch (fnName) {
-      case "register_user_rpc": {
-        const { p_username, p_password } = params;
-        const exists = Array.from(mockDb.users.values()).some(
-          (u) => u.username.toLowerCase() === p_username.toLowerCase()
+      case "login_or_register_user_rpc": {
+        const { p_username } = params;
+        const normalized = p_username.trim();
+        let user = Array.from(mockDb.users.values()).find(
+          (u) => u.username.toLowerCase() === normalized.toLowerCase()
         );
-        if (exists) throw new Error("Username already exists");
 
-        const newUserId = `user-${Math.random().toString(36).substring(2, 11)}`;
-        mockDb.users.set(newUserId, {
-          id: newUserId,
-          username: p_username,
-          password: p_password,
-          avatar_url: `https://api.dicebear.com/7.x/adventurer/svg?seed=${p_username}`,
-          balance: 1000.00,
-          created_at: new Date().toISOString()
-        });
-        return { data: newUserId as any, error: null };
-      }
-
-      case "login_user_rpc": {
-        const { p_username, p_password } = params;
-        const user = Array.from(mockDb.users.values()).find(
-          (u) => u.username.toLowerCase() === p_username.toLowerCase() && u.password === p_password
-        );
-        if (!user) throw new Error("Invalid username or password");
+        if (!user) {
+          const newUserId = `user-${Math.random().toString(36).substring(2, 11)}`;
+          user = {
+            id: newUserId,
+            username: normalized,
+            avatar_url: `https://api.dicebear.com/7.x/adventurer/svg?seed=${normalized}`,
+            balance: 1000.00,
+            created_at: new Date().toISOString()
+          };
+          mockDb.users.set(newUserId, user);
+        }
         return { data: user.id as any, error: null };
       }
 

@@ -170,65 +170,20 @@ export async function claimPayoutAction(
   } catch (e: any) {
     return { success: false, error: e.message || "An unexpected error occurred" };
   }
-}
-
-/**
- * Log in an existing user with username and password.
+}/**
+ * Unified authentication action (Password-free: logs in if exists, registers if new)
  */
-export async function loginAction(
-  username: string,
-  password: string
-): Promise<ActionResponse<string>> {
+export async function authenticateAction(username: string): Promise<ActionResponse<string>> {
   try {
-    if (!username || !password) {
-      return { success: false, error: "Username and password are required" };
+    if (!username || username.trim().length === 0) {
+      return { success: false, error: "Username is required" };
+    }
+    if (username.trim().length < 2) {
+      return { success: false, error: "Username must be at least 2 characters" };
     }
 
-    const { data: userId, error } = await dbRpc("login_user_rpc", {
-      p_username: username,
-      p_password: password,
-    });
-
-    if (error) {
-      return { success: false, error: error.message || String(error) };
-    }
-
-    const cookieStore = await cookies();
-    cookieStore.set("persona", userId, {
-      path: "/",
-      maxAge: 31536000,
-      sameSite: "lax",
-    });
-
-    return { success: true, data: userId };
-  } catch (e: any) {
-    return { success: false, error: e.message || "An unexpected error occurred" };
-  }
-}
-
-/**
- * Register a new user with starting 1000 tokens.
- */
-export async function registerAction(
-  username: string,
-  password: string
-): Promise<ActionResponse<string>> {
-  try {
-    if (!username || !password) {
-      return { success: false, error: "Username and password are required" };
-    }
-
-    if (username.trim().length < 3) {
-      return { success: false, error: "Username must be at least 3 characters" };
-    }
-
-    if (password.length < 4) {
-      return { success: false, error: "Password must be at least 4 characters" };
-    }
-
-    const { data: userId, error } = await dbRpc("register_user_rpc", {
+    const { data: userId, error } = await dbRpc("login_or_register_user_rpc", {
       p_username: username.trim(),
-      p_password: password,
     });
 
     if (error) {
@@ -247,7 +202,6 @@ export async function registerAction(
     return { success: false, error: e.message || "An unexpected error occurred" };
   }
 }
-
 /**
  * Log out the current user session.
  */
