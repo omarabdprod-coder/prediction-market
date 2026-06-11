@@ -220,6 +220,27 @@ export default function MarketDetailClient({
 
   const prices = pool.prices || outcomes.map(() => 1 / outcomes.length);
 
+  // Copy Trade Pre-fill logic from URL query params
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.get("copy") === "true") {
+        const outcome = searchParams.get("outcome");
+        const wager = searchParams.get("wager");
+        if (outcome !== null) {
+          const outcomeIdx = parseInt(outcome);
+          if (!isNaN(outcomeIdx) && outcomeIdx >= 0 && outcomeIdx < outcomes.length) {
+            setOutcomeIndex(outcomeIdx);
+          }
+        }
+        if (wager !== null) {
+          setAmountInput(wager);
+        }
+        setTradeType("buy");
+      }
+    }
+  }, [outcomes.length]);
+
   // Run AMM calculations client-side to provide a live preview as the user types
   useEffect(() => {
     setPreviewError(null);

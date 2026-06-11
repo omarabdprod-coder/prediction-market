@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { Market, UserProfile, UserPosition } from "@/lib/supabase";
 import CreateMarketModal from "./CreateMarketModal";
-import { Search, Compass, Clock, Award, ShieldAlert, ChevronRight, TrendingUp, Info, Trophy, Activity, MessageSquare, Send, Users } from "lucide-react";
+import { Search, Compass, Clock, Award, ShieldAlert, ChevronRight, TrendingUp, Info, Trophy, Activity, Zap, Copy, ExternalLink } from "lucide-react";
 
 interface DashboardClientProps {
   currentUser: UserProfile;
@@ -12,27 +12,6 @@ interface DashboardClientProps {
   markets: Market[];
   positions: any[];
   globalTransactions?: any[];
-}
-
-const TWITCH_COLORS = [
-  "text-red-400",
-  "text-blue-400",
-  "text-emerald-400",
-  "text-amber-400",
-  "text-pink-400",
-  "text-purple-400",
-  "text-cyan-400",
-  "text-orange-400",
-  "text-fuchsia-400",
-];
-
-function getTwitchColor(username: string) {
-  let hash = 0;
-  for (let i = 0; i < username.length; i++) {
-    hash = username.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const index = Math.abs(hash) % TWITCH_COLORS.length;
-  return TWITCH_COLORS[index];
 }
 
 export default function DashboardClient({
@@ -46,197 +25,6 @@ export default function DashboardClient({
   const [filterTab, setFilterTab] = useState<"active" | "resolved" | "all">("active");
   const [sortBy, setSortBy] = useState<"newest" | "ending" | "alphabetical">("newest");
   const [isModalOpen, setIsModalOpen] = useState(false);
-
-  // Chat Feed State
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Scroll to bottom on new message
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [chatMessages]);
-
-  useEffect(() => {
-    // Convert transactions to Twitch chat logs
-    const formattedTxs = (globalTransactions || []).map((tx, idx) => {
-      const isBuy = tx.type === "buy" || tx.type === "buy_yes" || tx.type.startsWith("buy");
-      const isSell = tx.type === "sell" || tx.type === "sell_yes" || tx.type.startsWith("sell");
-      const isCreate = tx.type === "create_market";
-      
-      const outcomes = tx.market?.outcomes || ["YES", "NO"];
-      let outcomeName = "YES";
-      if (tx.outcome_index !== undefined && tx.outcome_index !== null) {
-        outcomeName = outcomes[tx.outcome_index] || "YES";
-      }
-
-      let content: React.ReactNode = "";
-      let emote = "";
-      let emoteColor = "text-indigo-400";
-      
-      if (isBuy) {
-        content = (
-          <span>
-            bet <span className="text-white font-bold">{Number(tx.amount_tokens).toFixed(0)} T</span> on{" "}
-            <span className="text-emerald-400 font-bold">"{outcomeName}"</span> in{" "}
-            <Link href={`/market/${tx.market_id}`} className="text-indigo-400 hover:underline font-semibold font-sans">
-              {tx.market?.question}
-            </Link>
-          </span>
-        );
-        emote = "PogChamp 🚀";
-        emoteColor = "text-emerald-400";
-      } else if (isSell) {
-        content = (
-          <span>
-            sold <span className="text-white font-bold">{Number(tx.amount_shares).toFixed(0)} shares</span> of{" "}
-            <span className="text-orange-400 font-bold">"{outcomeName}"</span> on{" "}
-            <Link href={`/market/${tx.market_id}`} className="text-indigo-400 hover:underline font-semibold font-sans">
-              {tx.market?.question}
-            </Link>{" "}
-            for <span className="text-white font-bold">{Number(tx.amount_tokens).toFixed(0)} T</span>
-          </span>
-        );
-        emote = "monkaS 📉";
-        emoteColor = "text-orange-400";
-      } else if (isCreate) {
-        content = (
-          <span>
-            created a new market:{" "}
-            <Link href={`/market/${tx.market_id}`} className="text-indigo-400 hover:underline font-semibold font-sans">
-              {tx.market?.question}
-            </Link>
-          </span>
-        );
-        emote = "HYPERS 🔮";
-        emoteColor = "text-purple-400";
-      } else {
-        content = (
-          <span>
-            claimed a payout of <span className="text-white font-bold">{Number(tx.amount_tokens).toFixed(0)} T</span> on{" "}
-            <Link href={`/market/${tx.market_id}`} className="text-indigo-400 hover:underline font-semibold font-sans">
-              {tx.market?.question}
-            </Link>
-          </span>
-        );
-        emote = "EZ 🏆";
-        emoteColor = "text-yellow-400";
-      }
-
-      const isMod = tx.user?.username.toLowerCase() === "marketmaker";
-      const isBroadcaster = tx.market?.creator_id === tx.user?.id;
-      const badges = [];
-      if (isMod) badges.push("🛡️");
-      else if (isBroadcaster) badges.push("👑");
-      else if (Number(tx.user?.balance || 0) > 2000) badges.push("💎");
-      else badges.push("🔮");
-
-      return {
-        id: tx.id || `tx-${idx}`,
-        username: tx.user?.username || "Trader",
-        avatarUrl: tx.user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${idx}`,
-        content,
-        emote,
-        emoteColor,
-        badges,
-        timestamp: new Date(tx.created_at || Date.now()),
-      };
-    });
-
-    // Fun default comments
-    const defaultChats = [
-      {
-        id: "chat-1",
-        username: "Kabir",
-        avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Kabir",
-        content: "This prediction league is getting wild, who is top of the leaderboard? 👀",
-        emote: "monkaS 📉",
-        emoteColor: "text-orange-400",
-        badges: ["💎"],
-        timestamp: new Date(Date.now() - 1000 * 60 * 12),
-      },
-      {
-        id: "chat-2",
-        username: "Adi",
-        avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Adi",
-        content: "Double down on YES for BTC! Free tokens 🚀",
-        emote: "PogChamp 🚀",
-        emoteColor: "text-emerald-400",
-        badges: ["🔮"],
-        timestamp: new Date(Date.now() - 1000 * 60 * 8),
-      },
-      {
-        id: "chat-3",
-        username: "Omar H",
-        avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=OmarH",
-        content: "Wait, someone just resolve-locked my bet? PepeLaugh",
-        emote: "LUL 🎭",
-        emoteColor: "text-yellow-400",
-        badges: ["👑"],
-        timestamp: new Date(Date.now() - 1000 * 60 * 3),
-      }
-    ];
-
-    const combined = [...defaultChats, ...formattedTxs].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
-    );
-
-    setChatMessages(combined);
-  }, [globalTransactions]);
-
-  const handleSendChat = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-
-    const userMessage = {
-      id: `chat-${Math.random().toString(36).substring(2, 11)}`,
-      username: currentUser.username,
-      avatarUrl: currentUser.avatar_url,
-      content: chatInput.trim(),
-      emote: "Pog 💬",
-      emoteColor: "text-indigo-400",
-      badges: currentUser.username.toLowerCase() === "marketmaker" ? ["🛡️"] : ["🔮"],
-      timestamp: new Date(),
-    };
-
-    setChatMessages(prev => [...prev, userMessage]);
-    setChatInput("");
-
-    // Simulate mock reply from players list 1.5 seconds later
-    setTimeout(() => {
-      const PLAYERS = ["Adi", "Omar H", "Omar A", "Kabir", "Lorenzo", "Aditya", "Jad", "Adam", "Omar Debas", "Rosslan", "Sami", "Aashis"];
-      const randomPlayer = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
-      
-      const BOT_REPLIES = [
-        "POGGERS, that bet is free money! 🚀",
-        "no way that outcome wins, pure copium LUL 🎭",
-        "MarketMaker print more tokens please! EZ 🏆",
-        "Double down! monkaS 📉",
-        "Is that insider trading I see? monkaS 📉",
-        "EZ tokens, thanks for the liquidity 🏆",
-        "Who bet YES? absolute gigachad Pog",
-        "This league is getting wild PogChamp 🚀",
-        "What are those odds? PepeLaugh 🎭",
-        "I'm all-in on None for guest join PepeLaugh 🎭",
-      ];
-      const randomReply = BOT_REPLIES[Math.floor(Math.random() * BOT_REPLIES.length)];
-
-      const botMessage = {
-        id: `chat-${Math.random().toString(36).substring(2, 11)}`,
-        username: randomPlayer,
-        avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${randomPlayer}`,
-        content: randomReply,
-        emote: "",
-        emoteColor: "text-slate-400",
-        badges: ["🔮"],
-        timestamp: new Date(),
-      };
-
-      setChatMessages(prev => [...prev, botMessage]);
-    }, 1500);
-  };
 
   // Filter markets
   const filteredMarkets = markets.filter((m) => {
@@ -607,87 +395,142 @@ export default function DashboardClient({
                   );
                 })}
             </div>
-          </div>
-
-          {/* Twitch Live Stream Chat Feed */}
+                   {/* Live Copy-Trade Terminal */}
           <div className="glass-panel rounded-2xl p-5 space-y-4 flex flex-col h-[480px]">
             <div className="flex items-center justify-between border-b border-white/5 pb-3 shrink-0">
-              <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-indigo-400 animate-pulse" />
-                Live Stream Chat
+              <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1 flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-400 animate-pulse" />
+                Live Copy-Trade Terminal
               </h2>
-              <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold uppercase">
-                <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
-                {12 + (globalTransactions?.length || 0)} Viewers
-              </div>
+              <span className="text-[9px] font-black tracking-wider border border-amber-500/20 bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded uppercase select-none">
+                Active Order Flow
+              </span>
             </div>
 
-            {/* Chat Messages Box */}
-            <div className="flex-1 overflow-y-auto pr-1 space-y-3 scroll-smooth min-h-0">
-              {chatMessages.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
-                  Connecting to server...
+            {/* Terminal Feed Scroll area */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-3 min-h-0">
+              {globalTransactions.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs py-8 space-y-2">
+                  <Activity className="h-8 w-8 text-slate-600 animate-pulse" />
+                  <span>No trade activity recorded yet.</span>
                 </div>
               ) : (
-                chatMessages.map((msg) => {
-                  const twitchColor = getTwitchColor(msg.username);
+                globalTransactions.map((tx) => {
+                  const isBuy = tx.type === "buy" || tx.type === "buy_yes" || tx.type.startsWith("buy");
+                  const isSell = tx.type === "sell" || tx.type === "sell_yes" || tx.type.startsWith("sell");
+                  const isCreate = tx.type === "create_market";
+                  const isResolve = tx.type === "resolve_claim";
+
+                  const outcomes = tx.market?.outcomes || ["YES", "NO"];
+                  const outcomeIdx = tx.outcome_index !== undefined && tx.outcome_index !== null ? tx.outcome_index : 0;
+                  const outcomeName = outcomes[outcomeIdx] || "YES";
+
+                  let actionText = "";
+                  let badgeStyle = "";
+                  let destinationUrl = `/market/${tx.market_id}`;
+
+                  if (isBuy) {
+                    actionText = "BUY";
+                    badgeStyle = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                    destinationUrl = `/market/${tx.market_id}?copy=true&outcome=${outcomeIdx}&wager=${Number(tx.amount_tokens).toFixed(0)}`;
+                  } else if (isSell) {
+                    actionText = "SELL";
+                    badgeStyle = "bg-orange-500/10 text-orange-400 border border-orange-500/20";
+                  } else if (isCreate) {
+                    actionText = "NEW";
+                    badgeStyle = "bg-purple-500/10 text-purple-400 border border-purple-500/20";
+                  } else {
+                    actionText = "CLAIM";
+                    badgeStyle = "bg-blue-500/10 text-blue-400 border border-blue-500/20";
+                  }
+
                   return (
-                    <div key={msg.id} className="text-xs leading-relaxed font-sans animate-in fade-in duration-200">
-                      <span className="text-[10px] text-slate-600 font-mono mr-1.5">
-                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </span>
-                      
-                      {/* Badges */}
-                      <span className="mr-1 inline-flex gap-0.5 select-none">
-                        {msg.badges.map((b: string, bi: number) => (
-                          <span key={bi} className="text-[11px]" title="Chat badge">
-                            {b}
-                          </span>
-                        ))}
-                      </span>
-
-                      {/* Username */}
-                      <span className={`font-bold mr-1.5 ${twitchColor} cursor-pointer hover:underline`}>
-                        {msg.username}
-                      </span>
-
-                      {/* Message Content */}
-                      <span className="text-slate-300 font-medium break-all">
-                        {msg.content}
-                      </span>
-
-                      {/* Emote Badge */}
-                      {msg.emote && (
-                        <span className={`inline-block ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold font-mono bg-white/5 border border-white/5 ${msg.emoteColor} select-none`}>
-                          {msg.emote}
+                    <div 
+                      key={tx.id} 
+                      className="rounded-xl border border-white/5 bg-slate-950/40 p-3 space-y-2.5 transition-all hover:bg-slate-950/80 hover:border-white/10"
+                    >
+                      {/* Row 1: Header (User + Time) */}
+                      <div className="flex justify-between items-center text-xs">
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={tx.user?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${tx.user?.username}`}
+                            alt={tx.user?.username}
+                            className="h-5 w-5 rounded-full object-cover bg-slate-800"
+                          />
+                          <span className="font-bold text-slate-200">{tx.user?.username}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                      )}
+                      </div>
+
+                      {/* Row 2: Action details */}
+                      <div className="text-[11px] leading-relaxed text-slate-400 font-mono">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black mr-2 tracking-wide ${badgeStyle}`}>
+                          {actionText}
+                        </span>
+                        {isBuy && (
+                          <>
+                            bet <span className="text-emerald-400 font-semibold">{Number(tx.amount_tokens).toFixed(0)} T</span> on{" "}
+                            <span className="text-slate-100 font-bold">"{outcomeName}"</span> in
+                          </>
+                        )}
+                        {isSell && (
+                          <>
+                            sold <span className="text-orange-400 font-semibold">{Number(tx.amount_shares).toFixed(0)} sh</span> of{" "}
+                            <span className="text-slate-100 font-bold">"{outcomeName}"</span> in
+                          </>
+                        )}
+                        {isCreate && <>created a new prediction market</>}
+                        {isResolve && <>claimed winning shares payout in</>}
+                      </div>
+
+                      {/* Row 3: Market question link */}
+                      <div className="text-xs">
+                        <Link 
+                          href={`/market/${tx.market_id}`} 
+                          className="font-sans font-bold text-slate-200 hover:text-indigo-400 transition-colors line-clamp-1 flex items-center gap-1"
+                        >
+                          {tx.market?.question}
+                          <ExternalLink className="h-3 w-3 inline text-slate-600" />
+                        </Link>
+                      </div>
+
+                      {/* Row 4: Pricing metrics + CTA */}
+                      <div className="flex justify-between items-center pt-1.5 border-t border-white/5 text-[10px] font-mono">
+                        <div className="text-slate-500 flex gap-3">
+                          {!isCreate && (
+                            <>
+                              <span>Tokens: <strong className="text-slate-300">{Number(tx.amount_tokens).toFixed(0)} T</strong></span>
+                              <span>Shares: <strong className="text-slate-300">{Number(tx.amount_shares).toFixed(0)} sh</strong></span>
+                            </>
+                          )}
+                        </div>
+
+                        {isBuy ? (
+                          <Link
+                            href={destinationUrl}
+                            className="bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all rounded-lg px-2.5 py-1 flex items-center gap-1 text-[10px] font-bold cursor-pointer font-sans"
+                            title="Clones this wager on your account"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copy Bet 🚀
+                          </Link>
+                        ) : (
+                          <Link
+                            href={`/market/${tx.market_id}`}
+                            className="bg-slate-900/60 border border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white transition-all rounded-lg px-2.5 py-1 flex items-center gap-1 text-[10px] font-bold cursor-pointer font-sans"
+                          >
+                            Trade 📈
+                          </Link>
+                        )}
+                      </div>
                     </div>
                   );
                 })
               )}
-              <div ref={chatEndRef} />
             </div>
-
-            {/* Chat Input */}
-            <form onSubmit={handleSendChat} className="flex gap-2 border-t border-white/5 pt-3 shrink-0">
-              <input
-                type="text"
-                placeholder="Send a prediction chat message..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                maxLength={100}
-                className="flex-1 bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
-              />
-              <button
-                type="submit"
-                disabled={!chatInput.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer flex items-center justify-center shrink-0 active:scale-95"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </button>
-            </form>
-          </div>
+          </div>   </div>
 
           {/* Sandbox Info */}
           <div className="glass-panel rounded-2xl p-5 border-l-2 border-l-indigo-500 space-y-3">
