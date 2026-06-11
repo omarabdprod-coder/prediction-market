@@ -3,7 +3,7 @@ create extension if not exists "uuid-ossp";
 
 -- 1. Users Profile Table
 create table if not exists public.users (
-  id uuid primary key references auth.users on delete cascade,
+  id uuid primary key,
   username text not null,
   avatar_url text,
   balance numeric(12, 2) not null default 1000.00 check (balance >= 0),
@@ -15,7 +15,7 @@ alter table public.users enable row level security;
 drop policy if exists "Allow public read access to users" on public.users;
 create policy "Allow public read access to users" on public.users for select using (true);
 drop policy if exists "Allow users to update their own profiles" on public.users;
-create policy "Allow users to update their own profiles" on public.users for update using (auth.uid() = id);
+create policy "Allow users to update their own profiles" on public.users for update using (true);
 
 -- 2. Markets Table
 create table if not exists public.markets (
@@ -33,10 +33,6 @@ create table if not exists public.markets (
 alter table public.markets enable row level security;
 drop policy if exists "Allow public read access to markets" on public.markets;
 create policy "Allow public read access to markets" on public.markets for select using (true);
-drop policy if exists "Allow authenticated users to create markets" on public.markets;
-create policy "Allow authenticated users to create markets" on public.markets for insert with check (auth.uid() = creator_id);
-drop policy if exists "Allow creators to resolve their markets" on public.markets;
-create policy "Allow creators to resolve their markets" on public.markets for update using (auth.uid() = creator_id);
 
 -- 3. Liquidity Pools Table (CPMM: x * y = k)
 create table if not exists public.liquidity_pools (
@@ -84,33 +80,6 @@ create table if not exists public.transactions (
 alter table public.transactions enable row level security;
 drop policy if exists "Allow public read access to transactions" on public.transactions;
 create policy "Allow public read access to transactions" on public.transactions for select using (true);
-
-
--- 6. Trigger to automatically handle user signup
-create or replace function public.handle_new_user()
-returns trigger as $$
-begin
-  insert into public.users (id, username, avatar_url, balance)
-  values (
-    new.id,
-    coalesce(
-      new.raw_user_meta_data->>'custom_claims'->>'global_name',
-      new.raw_user_meta_data->>'full_name',
-      new.raw_user_meta_data->>'name',
-      'User_' || substr(new.id::text, 1, 8)
-    ),
-    coalesce(new.raw_user_meta_data->>'avatar_url', ''),
-    1000.00
-  );
-  return new;
-end;
-$$ language plpgsql security definer;
-
--- Recreate trigger
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
 
 -- ==========================================
 -- TRANSACTIONAL RPC FUNCTIONS FOR TRADING ENGINE
