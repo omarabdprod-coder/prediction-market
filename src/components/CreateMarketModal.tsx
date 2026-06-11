@@ -117,42 +117,47 @@ export default function CreateMarketModal({
     setLoading(true);
     setError(null);
 
-    const imageUrl = 
-      imageOption === "preset" 
-        ? selectedPresetUrl 
-        : imageOption === "custom" 
-          ? customImageUrl.trim() 
-          : fileBase64;
+    try {
+      const imageUrl = 
+        imageOption === "preset" 
+          ? selectedPresetUrl 
+          : imageOption === "custom" 
+            ? customImageUrl.trim() 
+            : fileBase64;
 
-    const res = await createMarketAction(
-      question,
-      description,
-      resolutionDate,
-      creatorId,
-      imageUrl || undefined,
-      taggedUsers,
-      activeOutcomes,
-      bValue
-    );
+      const res = await createMarketAction(
+        question,
+        description,
+        resolutionDate,
+        creatorId,
+        imageUrl || undefined,
+        taggedUsers,
+        activeOutcomes,
+        bValue
+      );
 
-    setLoading(false);
-
-    if (res.success) {
-      // Reset form
-      setQuestion("");
-      setDescription("");
-      setResolutionDate("");
-      setOutcomeType("binary");
-      setOptions(["Option 1", "Option 2", "Option 3"]);
-      setImageOption("preset");
-      setSelectedPresetUrl(PRESET_IMAGES[0].url);
-      setCustomImageUrl("");
-      setFileBase64("");
-      setFileError(null);
-      setTaggedUsers([]);
-      onClose();
-    } else {
-      setError(res.error || "Failed to create market.");
+      if (res.success) {
+        // Reset form
+        setQuestion("");
+        setDescription("");
+        setResolutionDate("");
+        setOutcomeType("binary");
+        setOptions(["Option 1", "Option 2", "Option 3"]);
+        setImageOption("preset");
+        setSelectedPresetUrl(PRESET_IMAGES[0].url);
+        setCustomImageUrl("");
+        setFileBase64("");
+        setFileError(null);
+        setTaggedUsers([]);
+        onClose();
+      } else {
+        setError(res.error || "Failed to create market.");
+      }
+    } catch (err: any) {
+      console.error("Error creating market:", err);
+      setError(err.message || "An unexpected client-side error occurred.");
+    } finally {
+      setLoading(false);
     }
   };
 
