@@ -48,21 +48,23 @@ export default function Navbar({ currentUser, allUsers }: NavbarProps) {
               <span className="text-xs font-semibold text-slate-400">Tokens</span>
             </div>
             
-            <button
-              onClick={async () => {
-                const { claimFaucetAction } = await import("@/app/actions");
-                const res = await claimFaucetAction(currentUser.id);
-                if (res.success) {
-                  window.location.reload();
-                } else {
-                  alert(res.error || "Faucet failed");
-                }
-              }}
-              title="Get +1,000 Tokens (Faucet)"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-600/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all cursor-pointer font-bold text-lg active:scale-95"
-            >
-              +
-            </button>
+            {currentUser.username.toLowerCase() === "marketmaker" && (
+              <button
+                onClick={async () => {
+                  const { claimFaucetAction } = await import("@/app/actions");
+                  const res = await claimFaucetAction(currentUser.id);
+                  if (res.success) {
+                    window.location.reload();
+                  } else {
+                    alert(res.error || "Faucet failed");
+                  }
+                }}
+                title="Get +1,000 Tokens (Faucet)"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-600/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all cursor-pointer font-bold text-lg active:scale-95"
+              >
+                +
+              </button>
+            )}
           </div>          {/* Persona Switcher Dropdown */}
           <div className="relative">
             <button

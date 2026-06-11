@@ -44,6 +44,8 @@ export interface Market {
   creator_id: string;
   status: "active" | "resolved";
   outcome: "YES" | "NO" | null;
+  image_url?: string;
+  tagged_users?: string[];
   created_at: string;
   yesPrice?: number; // UI helper
   noPrice?: number;  // UI helper
@@ -247,7 +249,7 @@ export async function dbRpc<T = any>(
       }
 
       case "create_market_rpc": {
-        const { p_question, p_description, p_resolution_date, p_creator_id } = params;
+        const { p_question, p_description, p_resolution_date, p_creator_id, p_image_url, p_tagged_users } = params;
         const creator = mockDb.users.get(p_creator_id);
         if (!creator) throw new Error("Creator user profile not found");
         if (creator.balance < 50.00) {
@@ -267,6 +269,8 @@ export async function dbRpc<T = any>(
           creator_id: p_creator_id,
           status: "active",
           outcome: null,
+          image_url: p_image_url,
+          tagged_users: p_tagged_users,
           created_at: new Date().toISOString()
         });
 
@@ -494,10 +498,15 @@ export async function dbRpc<T = any>(
         const { p_market_id, p_outcome, p_admin_id } = params;
         const market = mockDb.markets.get(p_market_id);
         const pool = mockDb.liquidityPools.get(p_market_id);
+        const adminUser = mockDb.users.get(p_admin_id);
 
         if (!market || !pool) throw new Error("Market or pool not found");
         if (market.status !== "active") throw new Error("Market is already resolved");
-        if (market.creator_id !== p_admin_id) throw new Error("Only the market creator can resolve this market");
+        
+        // Allow creator OR MarketMaker username bypass
+        const isAuthorized = market.creator_id === p_admin_id || 
+          (adminUser && adminUser.username.toLowerCase() === "marketmaker");
+        if (!isAuthorized) throw new Error("Only the market creator or MarketMaker can resolve this market");
 
         const refund = p_outcome === "YES" ? pool.yes_shares : pool.no_shares;
 

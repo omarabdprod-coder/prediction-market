@@ -17,7 +17,9 @@ export async function createMarketAction(
   question: string,
   description: string,
   resolutionDateStr: string,
-  creatorId: string
+  creatorId: string,
+  imageUrl?: string,
+  taggedUsers?: string[]
 ): Promise<ActionResponse<string>> {
   try {
     if (!question || question.trim().length === 0) {
@@ -41,6 +43,8 @@ export async function createMarketAction(
       p_description: description,
       p_resolution_date: resolutionDate.toISOString(),
       p_creator_id: creatorId,
+      p_image_url: imageUrl || null,
+      p_tagged_users: taggedUsers || null,
     });
 
     if (error) {
@@ -221,6 +225,13 @@ export async function logoutAction(): Promise<ActionResponse<void>> {
  */
 export async function claimFaucetAction(userId: string): Promise<ActionResponse<void>> {
   try {
+    // Restrict to MarketMaker only
+    const { fetchUser } = await import("@/lib/supabase");
+    const user = await fetchUser(userId);
+    if (!user || user.username.toLowerCase() !== "marketmaker") {
+      return { success: false, error: "Only the MarketMaker user can claim faucet tokens." };
+    }
+
     const { error } = await dbRpc("faucet_tokens_rpc", {
       p_user_id: userId,
     });

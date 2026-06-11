@@ -26,6 +26,8 @@ create table if not exists public.markets (
   creator_id uuid not null references public.users(id),
   status text not null default 'active' check (status in ('active', 'resolved')),
   outcome text check (outcome in ('YES', 'NO')),
+  image_url text,
+  tagged_users text[],
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -90,7 +92,9 @@ create or replace function public.create_market_rpc(
   p_question text,
   p_description text,
   p_resolution_date timestamp with time zone,
-  p_creator_id uuid
+  p_creator_id uuid,
+  p_image_url text default null,
+  p_tagged_users text[] default null
 )
 returns uuid as $$
 declare
@@ -107,8 +111,8 @@ begin
   where id = p_creator_id;
 
   -- Insert market
-  insert into public.markets (question, description, resolution_date, creator_id)
-  values (p_question, p_description, p_resolution_date, p_creator_id)
+  insert into public.markets (question, description, resolution_date, creator_id, image_url, tagged_users)
+  values (p_question, p_description, p_resolution_date, p_creator_id, p_image_url, p_tagged_users)
   returning id into v_market_id;
 
   -- Insert liquidity pool (50 Yes, 50 No, k = 2500)
@@ -465,8 +469,11 @@ begin
     raise exception 'Market is already resolved';
   end if;
 
-  if v_creator_id != p_admin_id then
-    raise exception 'Only the market creator can resolve this market';
+  -- Allow creator OR MarketMaker admin to resolve
+  if v_creator_id != p_admin_id and not exists (
+    select 1 from public.users where id = p_admin_id and lower(username) = 'marketmaker'
+  ) then
+    raise exception 'Only the market creator or MarketMaker can resolve this market';
   end if;
 
   if p_outcome not in ('YES', 'NO') then

@@ -26,6 +26,12 @@ export default function DashboardClient({
 
   // Filter markets
   const filteredMarkets = markets.filter((m) => {
+    // Insider Lockout: Hide if logged-in user is tagged
+    const isInsider = m.tagged_users?.some(uname => 
+      uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
+    );
+    if (isInsider) return false;
+
     const matchesSearch =
       m.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (m.description || "").toLowerCase().includes(searchQuery.toLowerCase());
@@ -51,7 +57,13 @@ export default function DashboardClient({
   });
 
   // Calculate user portfolio stats
-  const activePositions = positions.filter((p) => p.yes_shares > 0 || p.no_shares > 0);
+  const activePositions = positions.filter((p) => {
+    const hasShares = p.yes_shares > 0 || p.no_shares > 0;
+    const isInsider = p.market?.tagged_users?.some((uname: string) => 
+      uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
+    );
+    return hasShares && !isInsider;
+  });
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8 flex-1">
@@ -166,66 +178,78 @@ export default function DashboardClient({
                 const yesPercent = Math.round((market.yesPrice || 0.5) * 100);
                 const noPercent = 100 - yesPercent;
 
-                return (
+                 return (
                   <div
                     key={market.id}
-                    className="glass-panel glass-panel-hover flex flex-col justify-between rounded-2xl p-5 space-y-4"
+                    className="glass-panel glass-panel-hover flex flex-col justify-between rounded-2xl overflow-hidden border border-white/5 bg-slate-900 shadow-lg hover:border-indigo-500/20 transition-all duration-300"
                   >
-                    {/* Header */}
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        {market.status === "resolved" ? (
-                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded border bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
-                            Resolved {market.outcome}
+                    {/* Cover Image banner */}
+                    <div className="h-28 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
+                      <img
+                        src={market.image_url || "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=500&auto=format&fit=crop&q=60"}
+                        alt={market.question}
+                        className="h-full w-full object-cover opacity-60 hover:scale-105 transition-transform duration-500"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent opacity-90" />
+                    </div>
+
+                    <div className="p-5 flex flex-col justify-between flex-1 space-y-4">
+                      {/* Header */}
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          {market.status === "resolved" ? (
+                            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded border bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+                              Resolved {market.outcome}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse">
+                              Active
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-500">
+                            Ends {new Date(market.resolution_date).toLocaleDateString()}
                           </span>
-                        ) : (
-                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse">
-                            Active
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-100 hover:text-indigo-400 transition-colors leading-snug">
+                          <Link href={`/market/${market.id}`}>{market.question}</Link>
+                        </h3>
+                      </div>
+
+                      {/* Progress representation */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
+                          <span className="flex items-center gap-1.5 text-emerald-400">
+                            YES <span className="font-mono text-sm font-bold">{yesPercent}%</span>
                           </span>
-                        )}
+                          <span className="flex items-center gap-1.5 text-red-400">
+                            NO <span className="font-mono text-sm font-bold">{noPercent}%</span>
+                          </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-950 flex border border-white/5">
+                          <div
+                            style={{ width: `${yesPercent}%` }}
+                            className="h-full bg-emerald-500 transition-all duration-500"
+                          />
+                          <div
+                            style={{ width: `${noPercent}%` }}
+                            className="h-full bg-red-500 transition-all duration-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Footer */}
+                      <div className="flex items-center justify-between border-t border-white/5 pt-4">
                         <span className="text-[10px] text-slate-500">
-                          Ends {new Date(market.resolution_date).toLocaleDateString()}
+                          Initial pool 50 Tokens
                         </span>
+                        <Link
+                          href={`/market/${market.id}`}
+                          className="flex items-center gap-1 text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
+                        >
+                          Trade
+                          <ChevronRight className="h-4.5 w-4.5" />
+                        </Link>
                       </div>
-                      <h3 className="text-sm font-bold text-slate-100 hover:text-indigo-400 transition-colors leading-snug">
-                        <Link href={`/market/${market.id}`}>{market.question}</Link>
-                      </h3>
-                    </div>
-
-                    {/* Progress representation */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
-                        <span className="flex items-center gap-1.5 text-emerald-400">
-                          YES <span className="font-mono text-sm font-bold">{yesPercent}%</span>
-                        </span>
-                        <span className="flex items-center gap-1.5 text-red-400">
-                          NO <span className="font-mono text-sm font-bold">{noPercent}%</span>
-                        </span>
-                      </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-950 flex">
-                        <div
-                          style={{ width: `${yesPercent}%` }}
-                          className="h-full bg-emerald-500 transition-all duration-500"
-                        />
-                        <div
-                          style={{ width: `${noPercent}%` }}
-                          className="h-full bg-red-500 transition-all duration-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                      <span className="text-[10px] text-slate-500">
-                        Initial pool 50 Tokens
-                      </span>
-                      <Link
-                        href={`/market/${market.id}`}
-                        className="flex items-center gap-1 text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
-                      >
-                        Trade
-                        <ChevronRight className="h-4.5 w-4.5" />
-                      </Link>
                     </div>
                   </div>
                 );

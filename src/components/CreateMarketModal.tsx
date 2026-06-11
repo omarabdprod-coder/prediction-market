@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { createMarketAction } from "@/app/actions";
-import { Calendar, AlertCircle, X, HelpCircle, ArrowRight } from "lucide-react";
+import { Calendar, AlertCircle, X, HelpCircle, ArrowRight, Image as ImageIcon, Users } from "lucide-react";
 
 interface CreateMarketModalProps {
   isOpen: boolean;
@@ -10,6 +10,20 @@ interface CreateMarketModalProps {
   creatorId: string;
   userBalance: number;
 }
+
+const PRESET_IMAGES = [
+  { label: "📊 Finance", url: "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=500&auto=format&fit=crop&q=60" },
+  { label: "💻 Tech", url: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop&q=60" },
+  { label: "🎮 Gaming", url: "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?w=500&auto=format&fit=crop&q=60" },
+  { label: "⚔️ Esports", url: "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=500&auto=format&fit=crop&q=60" },
+  { label: "🏛️ Politics", url: "https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=500&auto=format&fit=crop&q=60" },
+  { label: "👥 Social", url: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=60" }
+];
+
+const PLAYERS = [
+  "Adi", "Omar H", "Omar A", "Kabir", "Lorenzo", "Aditya", 
+  "Jad", "Adam", "Omar Debas", "Rosslan", "Sami", "Aashis"
+];
 
 export default function CreateMarketModal({
   isOpen,
@@ -20,10 +34,22 @@ export default function CreateMarketModal({
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
   const [resolutionDate, setResolutionDate] = useState("");
+  const [imageOption, setImageOption] = useState<"preset" | "custom">("preset");
+  const [selectedPresetUrl, setSelectedPresetUrl] = useState(PRESET_IMAGES[0].url);
+  const [customImageUrl, setCustomImageUrl] = useState("");
+  const [taggedUsers, setTaggedUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const handlePlayerToggle = (player: string) => {
+    if (taggedUsers.includes(player)) {
+      setTaggedUsers(taggedUsers.filter((u) => u !== player));
+    } else {
+      setTaggedUsers([...taggedUsers, player]);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,27 +61,43 @@ export default function CreateMarketModal({
     setLoading(true);
     setError(null);
 
-    const res = await createMarketAction(question, description, resolutionDate, creatorId);
+    const imageUrl = imageOption === "preset" ? selectedPresetUrl : customImageUrl.trim();
+
+    const res = await createMarketAction(
+      question,
+      description,
+      resolutionDate,
+      creatorId,
+      imageUrl || undefined,
+      taggedUsers
+    );
+
     setLoading(false);
 
     if (res.success) {
-      // Clear form and close modal
+      // Reset form
       setQuestion("");
       setDescription("");
       setResolutionDate("");
+      setImageOption("preset");
+      setSelectedPresetUrl(PRESET_IMAGES[0].url);
+      setCustomImageUrl("");
+      setTaggedUsers([]);
       onClose();
     } else {
       setError(res.error || "Failed to create market.");
     }
   };
 
+  const currentImageUrl = imageOption === "preset" ? selectedPresetUrl : customImageUrl.trim();
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
       {/* Backdrop */}
       <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal Container */}
-      <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl animate-in scale-in duration-200">
+      <div className="relative z-10 w-full max-w-lg my-8 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl animate-in scale-in duration-200">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
           <div className="flex items-center gap-2">
@@ -73,7 +115,7 @@ export default function CreateMarketModal({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
           {error && (
             <div className="flex items-start gap-2.5 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-400">
               <AlertCircle className="h-5 w-5 shrink-0" />
@@ -105,12 +147,119 @@ export default function CreateMarketModal({
             <textarea
               id="description"
               required
-              rows={3}
+              rows={2}
               placeholder="Detail the exact source, rules, and conditions for resolving this market."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all resize-none"
             />
+          </div>
+
+          {/* Market Image Field */}
+          <div className="space-y-2.5">
+            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <ImageIcon className="h-3.5 w-3.5 text-indigo-400" />
+              Market Image Cover
+            </label>
+
+            {/* Toggle options */}
+            <div className="flex rounded-xl bg-slate-950 p-1 border border-white/5">
+              <button
+                type="button"
+                onClick={() => setImageOption("preset")}
+                className={`flex-1 rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                  imageOption === "preset" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Presets
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageOption("custom")}
+                className={`flex-1 rounded-lg py-1.5 text-center text-xs font-bold transition-all cursor-pointer ${
+                  imageOption === "custom" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Custom URL
+              </button>
+            </div>
+
+            {/* Select options */}
+            {imageOption === "preset" ? (
+              <div className="grid grid-cols-3 gap-1.5">
+                {PRESET_IMAGES.map((img) => (
+                  <button
+                    key={img.label}
+                    type="button"
+                    onClick={() => setSelectedPresetUrl(img.url)}
+                    className={`rounded-lg border px-2 py-1.5 text-xs text-left font-medium transition-all truncate cursor-pointer ${
+                      selectedPresetUrl === img.url
+                        ? "border-indigo-500 bg-indigo-500/10 text-white"
+                        : "border-white/5 bg-slate-950/20 text-slate-400 hover:bg-white/5"
+                    }`}
+                  >
+                    {img.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <input
+                type="url"
+                placeholder="Paste direct image link (e.g. https://...jpg)"
+                value={customImageUrl}
+                onChange={(e) => setCustomImageUrl(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
+              />
+            )}
+
+            {/* Image Preview thumbnail */}
+            {currentImageUrl && (
+              <div className="relative h-20 w-full overflow-hidden rounded-xl border border-white/5 bg-slate-950">
+                <img
+                  src={currentImageUrl}
+                  alt="Market Cover Preview"
+                  className="h-full w-full object-cover opacity-70"
+                  onError={(e) => {
+                    // Fallback on error
+                    (e.target as HTMLElement).style.display = "none";
+                  }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-[10px] text-slate-500 font-mono">Image Cover Preview</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Insider Lockout Tagging */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5 text-indigo-400" />
+              Involved Players (Insider Lockout)
+            </label>
+            <p className="text-[10px] text-slate-500 leading-normal">
+              Select players involved in this event. Tagged players will be locked out from betting or viewing this market to avoid conflicts of interest.
+            </p>
+
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+              {PLAYERS.map((player) => {
+                const isSelected = taggedUsers.includes(player);
+                return (
+                  <button
+                    key={player}
+                    type="button"
+                    onClick={() => handlePlayerToggle(player)}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs text-center font-semibold transition-all truncate cursor-pointer ${
+                      isSelected
+                        ? "border-red-500/40 bg-red-500/10 text-red-300"
+                        : "border-white/5 bg-slate-950/20 text-slate-400 hover:bg-white/5"
+                    }`}
+                  >
+                    {player}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Resolution Date */}
@@ -136,15 +285,14 @@ export default function CreateMarketModal({
             </div>
             <p className="text-slate-300 text-xs leading-relaxed">
               Creating a market requires injecting an initial <strong>50 Tokens</strong>. 
-              This collateral sets up the AMM pool at a 50/50 probability (50 YES shares / 50 NO shares). 
-              If you resolve the market, you will get back the value of the pool's remaining winning shares.
+              This collateral sets up the AMM pool at a 50/50 probability (50 YES shares / 50 NO shares).
             </p>
           </div>
 
           {/* Footer Actions */}
           <div className="flex items-center justify-between border-t border-white/5 pt-4 mt-6">
             <div className="text-xs text-slate-400">
-              Your Balance: <span className="font-mono text-slate-200 font-bold">{userBalance.toFixed(0)} T</span>
+              Balance: <span className="font-mono text-slate-200 font-bold">{userBalance.toFixed(0)} T</span>
             </div>
             <div className="flex gap-3">
               <button

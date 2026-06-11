@@ -215,7 +215,7 @@ export default function MarketDetailClient({
   const [actionLoading, setActionLoading] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const isCreator = market.creator_id === currentUser.id;
+  const isCreator = market.creator_id === currentUser.id || currentUser.username.toLowerCase() === "marketmaker";
   const isMarketActive = market.status === "active";
 
   const yesPercent = Math.round((pool.yesPrice || 0.5) * 100);
@@ -365,6 +365,38 @@ export default function MarketDetailClient({
     }
   };
 
+  const isInsider = market.tagged_users?.some((uname: string) => 
+    uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
+  );
+
+  if (isInsider) {
+    return (
+      <div className="mx-auto w-full max-w-md px-4 py-16 space-y-6 text-center animate-in fade-in duration-300 flex-1 flex flex-col justify-center">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 shadow-lg shadow-red-500/5">
+          <ShieldAlert className="h-8 w-8" />
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-xl font-extrabold tracking-tight text-white">Insider Lockout Activated</h1>
+          <p className="text-sm text-slate-400 leading-relaxed">
+            You are registered as an involved player in this prediction market: <strong className="text-slate-200">{market.question}</strong>
+          </p>
+          <p className="text-xs text-slate-500 leading-relaxed border border-white/5 bg-slate-950/40 p-4 rounded-xl">
+            To prevent conflicts of interest and maintain fairness in our predictions sandbox league, tagged players are restricted from trading or viewing details.
+          </p>
+        </div>
+        <div>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-5 py-3 text-xs font-bold text-slate-300 border border-white/10 hover:bg-white/5 hover:text-white transition-all cursor-pointer"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Return to Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 flex-1">
       {/* Back link */}
@@ -380,7 +412,18 @@ export default function MarketDetailClient({
         {/* Left Column: Details & Outcome Info */}
         <div className="lg:col-span-8 space-y-6">
           {/* Main Info Card */}
-          <div className="glass-panel rounded-2xl p-6 sm:p-8 space-y-6">
+          <div className="glass-panel rounded-2xl overflow-hidden bg-slate-900 border border-white/5 shadow-2xl">
+            {/* Header Cover Image */}
+            <div className="h-48 w-full overflow-hidden relative border-b border-white/5 bg-slate-950">
+              <img
+                src={market.image_url || "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800&auto=format&fit=crop&q=60"}
+                alt={market.question}
+                className="h-full w-full object-cover opacity-60"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent opacity-90" />
+            </div>
+
+            <div className="p-6 sm:p-8 space-y-6">
             {/* Tag/Meta */}
             <div className="flex flex-wrap items-center gap-3">
               {isMarketActive ? (
@@ -473,6 +516,7 @@ export default function MarketDetailClient({
               <span>Pool liquidity reserves: {Number(pool.yes_shares).toFixed(0)} YES / {Number(pool.no_shares).toFixed(0)} NO</span>
             </div>
           </div>
+        </div>
 
           {/* User Holdings Position Card */}
           <div className="glass-panel rounded-2xl p-6 space-y-4">
