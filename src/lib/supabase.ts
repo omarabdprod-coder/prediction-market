@@ -4,6 +4,8 @@ import {
   lmsrPrices,
   calculateBuyLmsr,
   calculateSellLmsr,
+  getYesPrice,
+  getNoPrice,
 } from "./amm";
 
 // Determine if we should use mock database
@@ -544,9 +546,21 @@ export async function fetchMarkets(): Promise<Market[]> {
 
     return (markets || []).map(m => {
       const pool = (pools || []).find(p => p.market_id === m.id);
-      const prices = pool ? lmsrPrices(pool.shares, Number(pool.b)) : m.outcomes.map(() => 1 / m.outcomes.length);
+      const outcomes = m.outcomes || ["YES", "NO"];
+      
+      let prices: number[];
+      if (pool && pool.shares) {
+        prices = lmsrPrices(pool.shares, Number(pool.b || 100));
+      } else if (pool && (pool as any).yes_shares !== undefined && (pool as any).no_shares !== undefined) {
+        const yesPrice = getYesPrice(Number((pool as any).yes_shares), Number((pool as any).no_shares));
+        prices = [yesPrice, 1 - yesPrice];
+      } else {
+        prices = outcomes.map(() => 1 / outcomes.length);
+      }
+
       return {
         ...m,
+        outcomes,
         prices,
       };
     });
@@ -579,11 +593,25 @@ export async function fetchMarketDetails(marketId: string) {
       .single();
     if (pErr) throw pErr;
 
+    const outcomes = market.outcomes || ["YES", "NO"];
+    let prices: number[];
+    if (pool && pool.shares) {
+      prices = lmsrPrices(pool.shares, Number(pool.b || 100));
+    } else if (pool && (pool as any).yes_shares !== undefined && (pool as any).no_shares !== undefined) {
+      const yesPrice = getYesPrice(Number((pool as any).yes_shares), Number((pool as any).no_shares));
+      prices = [yesPrice, 1 - yesPrice];
+    } else {
+      prices = outcomes.map(() => 1 / outcomes.length);
+    }
+
     return {
-      market,
+      market: {
+        ...market,
+        outcomes,
+      },
       pool: {
         ...pool,
-        prices: lmsrPrices(pool.shares, Number(pool.b)),
+        prices,
       }
     };
   }
@@ -624,7 +652,19 @@ export async function fetchUserPositions(userId: string) {
       .select("*, market:markets(*)")
       .eq("user_id", userId);
     if (error) throw error;
-    return data || [];
+    
+    return (data || []).map(pos => {
+      const market = pos.market;
+      const outcomes = market?.outcomes || ["YES", "NO"];
+      let shares = pos.shares;
+      if (!shares && pos.yes_shares !== undefined && pos.no_shares !== undefined) {
+        shares = [Number(pos.yes_shares), Number(pos.no_shares)];
+      }
+      return {
+        ...pos,
+        shares: shares || outcomes.map(() => 0),
+      };
+    });
   }
 
   // Mock implementation
