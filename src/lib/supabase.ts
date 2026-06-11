@@ -568,10 +568,19 @@ export async function fetchMarkets(): Promise<Market[]> {
 
   // Mock implementation
   return Array.from(mockDb.markets.values()).map(m => {
-    const pool = mockDb.liquidityPools.get(m.id)!;
-    const prices = lmsrPrices(pool.shares, pool.b);
+    const pool = mockDb.liquidityPools.get(m.id);
+    const outcomes = m.outcomes || ["YES", "NO"];
+    
+    let prices: number[];
+    if (pool && pool.shares) {
+      prices = lmsrPrices(pool.shares, pool.b);
+    } else {
+      prices = outcomes.map(() => 1 / outcomes.length);
+    }
+
     return {
       ...m,
+      outcomes,
       prices,
     };
   });
@@ -619,7 +628,15 @@ export async function fetchMarketDetails(marketId: string) {
   // Mock implementation
   const market = mockDb.markets.get(marketId);
   const pool = mockDb.liquidityPools.get(marketId);
-  if (!market || !pool) throw new Error("Market details not found");
+  if (!market) throw new Error("Market not found");
+
+  const outcomes = market.outcomes || ["YES", "NO"];
+  let prices: number[];
+  if (pool && pool.shares) {
+    prices = lmsrPrices(pool.shares, pool.b);
+  } else {
+    prices = outcomes.map(() => 1 / outcomes.length);
+  }
 
   const creator = mockDb.users.get(market.creator_id) || {
     id: market.creator_id,
@@ -632,11 +649,12 @@ export async function fetchMarketDetails(marketId: string) {
   return {
     market: {
       ...market,
-      creator
+      creator,
+      outcomes,
     },
     pool: {
       ...pool,
-      prices: lmsrPrices(pool.shares, pool.b),
+      prices,
     }
   };
 }
@@ -670,10 +688,15 @@ export async function fetchUserPositions(userId: string) {
   // Mock implementation
   return Array.from(mockDb.userPositions.values())
     .filter(pos => pos.user_id === userId)
-    .map(pos => ({
-      ...pos,
-      market: mockDb.markets.get(pos.market_id)
-    }));
+    .map(pos => {
+      const market = mockDb.markets.get(pos.market_id);
+      const outcomes = market?.outcomes || ["YES", "NO"];
+      return {
+        ...pos,
+        market,
+        shares: pos.shares || outcomes.map(() => 0)
+      };
+    });
 }
 
 export async function fetchMarketTransactions(marketId: string) {

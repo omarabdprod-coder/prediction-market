@@ -312,6 +312,8 @@ export default function DashboardClient({
                 {activePositions.map((pos) => {
                   const m = pos.market;
                   if (!m) return null;
+                  const outcomes = m.outcomes || ["YES", "NO"];
+
                   return (
                     <div key={pos.id} className="rounded-xl bg-slate-950/50 border border-white/5 p-3.5 space-y-3">
                       <div className="flex justify-between items-start gap-3">
@@ -329,26 +331,28 @@ export default function DashboardClient({
                         )}
                       </div>
 
-                      <div className="flex justify-between items-center text-xs border-t border-white/5 pt-2 font-mono">
-                        <div>
-                          {pos.yes_shares > 0 && (
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                              <span className="text-slate-400">YES:</span>
-                              <span className="text-slate-100 font-bold">{pos.yes_shares.toFixed(1)} sh</span>
-                            </div>
-                          )}
-                          {pos.no_shares > 0 && (
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                              <span className="text-slate-400">NO:</span>
-                              <span className="text-slate-100 font-bold">{pos.no_shares.toFixed(1)} sh</span>
-                            </div>
-                          )}
+                      <div className="flex flex-col gap-1.5 text-xs border-t border-white/5 pt-2 font-mono w-full">
+                        <div className="space-y-1">
+                          {outcomes.map((opt: string, idx: number) => {
+                            const shares = pos.shares ? pos.shares[idx] : (idx === 0 ? pos.yes_shares : pos.no_shares);
+                            const shNum = Number(shares || 0);
+                            if (shNum <= 0) return null;
+                            return (
+                              <div key={opt} className="flex items-center justify-between text-slate-400 text-[11px]">
+                                <span className="flex items-center gap-1 font-sans">
+                                  <span className={`h-1.5 w-1.5 rounded-full ${idx === 0 ? "bg-indigo-500" : "bg-slate-600"}`} />
+                                  <span className="truncate max-w-[100px]">{opt}:</span>
+                                </span>
+                                <span className="text-slate-100 font-bold">{shNum.toFixed(1)} sh</span>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <Link href={`/market/${m.id}`} className="text-[10px] text-indigo-400 font-bold hover:underline">
-                          View details
-                        </Link>
+                        <div className="flex justify-end pt-1">
+                          <Link href={`/market/${m.id}`} className="text-[10px] text-indigo-400 font-bold hover:underline font-sans">
+                            View details
+                          </Link>
+                        </div>
                       </div>
                     </div>
                   );
