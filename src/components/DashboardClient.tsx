@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Market, UserProfile, UserPosition } from "@/lib/supabase";
 import CreateMarketModal from "./CreateMarketModal";
 import LiveCountdown from "./LiveCountdown";
+import { mergeAccountsAction } from "@/app/actions";
 import { Search, Compass, Clock, Award, ShieldAlert, ChevronRight, TrendingUp, Info, Trophy, Activity, Zap, Copy, ExternalLink } from "lucide-react";
 
 interface DashboardClientProps {
@@ -29,6 +30,13 @@ export default function DashboardClient({
   const [sortBy, setSortBy] = useState<"newest" | "ending" | "alphabetical">("newest");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"leaderboard" | "shame">("leaderboard");
+
+  // MarketMaker Admin States
+  const [sourceUserId, setSourceUserId] = useState("");
+  const [targetUserId, setTargetUserId] = useState("");
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const [adminSuccess, setAdminSuccess] = useState<string | null>(null);
 
   // Filter global transactions to prevent insider trading leaks
   const filteredTransactions = globalTransactions.filter((tx) => {
@@ -74,7 +82,7 @@ export default function DashboardClient({
 
   // Calculate user portfolio stats
   const activePositions = positions.filter((p) => {
-    const hasShares = p.yes_shares > 0 || p.no_shares > 0;
+    const hasShares = p.shares ? p.shares.some((s: any) => Number(s) > 0) : (Number(p.yes_shares || 0) > 0 || Number(p.no_shares || 0) > 0);
     const isInsider = p.market?.tagged_users?.some((uname: string) => 
       uname.toLowerCase().trim() === currentUser.username.toLowerCase().trim()
     );
@@ -104,6 +112,206 @@ export default function DashboardClient({
           </button>
         </div>
       </div>
+
+      {/* MarketMaker Operations Hub */}
+      {currentUser.username.toLowerCase().trim() === "marketmaker" && (
+        <div className="relative overflow-hidden rounded-2xl border border-yellow-500/20 bg-yellow-500/[0.02] p-6 sm:p-8 space-y-6">
+          <div className="absolute top-0 right-0 h-40 w-40 rounded-full bg-yellow-500/[0.02] blur-3xl pointer-events-none" />
+          
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
+            <div className="space-y-1">
+              <h2 className="text-lg font-black text-white flex items-center gap-2">
+                <ShieldAlert className="h-5.5 w-5.5 text-yellow-500" />
+                MarketMaker Operations Hub
+              </h2>
+              <p className="text-xs text-slate-400">
+                Audit bad actors, conjoin duplicate trade ledgers, and execute failsafe account merges.
+              </p>
+            </div>
+            <span className="text-[10px] font-black tracking-wider bg-yellow-500/10 text-yellow-500 px-3 py-1 rounded border border-yellow-500/20 uppercase select-none align-self-start sm:align-self-auto">
+              Administrator Privileges
+            </span>
+          </div>
+
+          {/* Alerts */}
+          {adminError && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-400">
+              <Info className="h-4.5 w-4.5 shrink-0 animate-bounce" />
+              <span>{adminError}</span>
+            </div>
+          )}
+          {adminSuccess && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-xs text-emerald-400">
+              <Info className="h-4.5 w-4.5 shrink-0 text-emerald-500" />
+              <span>{adminSuccess}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            {/* Left Column: Declared Bad Actors Audit */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-widest flex items-center gap-1.5">
+                <Trophy className="h-4 w-4 text-yellow-500 rotate-180" />
+                Audit: Declared Bad Actors
+              </h3>
+              
+              {allUsers.filter(u => u.declared_identity_id).length === 0 ? (
+                <div className="rounded-xl border border-white/5 bg-slate-950/20 p-6 text-center text-slate-500 text-xs">
+                  No declared aliases or unverified accounts registered.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {allUsers.filter(u => u.declared_identity_id).map((badActor) => {
+                    const realProfile = allUsers.find(u => u.id === badActor.declared_identity_id);
+                    return (
+                      <div 
+                        key={badActor.id} 
+                        className="rounded-xl border border-white/5 bg-slate-950/40 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:bg-slate-950/80"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-200 text-xs">{badActor.username}</span>
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                              Alias
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 leading-normal">
+                            Claims identity of: <strong className="text-indigo-400">{realProfile ? realProfile.username : "Unknown User"}</strong>
+                          </p>
+                          <div className="text-[10px] text-slate-500 font-mono">
+                            Alias Balance: {badActor.balance.toFixed(0)} T
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={adminLoading}
+                          onClick={async () => {
+                            if (!confirm(`Merge alias "${badActor.username}" into real profile "${realProfile?.username || "Unknown"}"? This will proportionally scale their bets and delete the alias.`)) return;
+                            setAdminLoading(true);
+                            setAdminError(null);
+                            setAdminSuccess(null);
+                            const res = await mergeAccountsAction(badActor.id, badActor.declared_identity_id!);
+                            setAdminLoading(false);
+                            if (res.success) {
+                              setAdminSuccess(`Successfully merged and purged alias "${badActor.username}"!`);
+                              window.location.reload();
+                            } else {
+                              setAdminError(res.error || "Merge failed");
+                            }
+                          }}
+                          className="glow-btn-purple cursor-pointer rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-bold text-white transition-all text-center self-start sm:self-auto disabled:opacity-50"
+                        >
+                          Merge & Purge
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: Failsafe Manual Override Merge */}
+            <div className="space-y-4 rounded-xl border border-white/5 bg-slate-950/20 p-5">
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-widest flex items-center gap-1.5">
+                <Zap className="h-4 w-4 text-yellow-500" />
+                Failsafe Manual Override Merge
+              </h3>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Manually combine any custom account's trades into a core user. This is a failsafe to reconcile unlisted profiles.
+              </p>
+
+              <form 
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!sourceUserId || !targetUserId) return;
+                  if (sourceUserId === targetUserId) {
+                    setAdminError("Cannot merge an account into itself.");
+                    return;
+                  }
+                  const uSource = allUsers.find(u => u.id === sourceUserId);
+                  const uTarget = allUsers.find(u => u.id === targetUserId);
+                  if (!confirm(`Execute MANUAL FAILSAFE MERGE: Combine all trades/positions of "${uSource?.username}" into "${uTarget?.username}" and delete "${uSource?.username}"?`)) return;
+                  
+                  setAdminLoading(true);
+                  setAdminError(null);
+                  setAdminSuccess(null);
+                  const res = await mergeAccountsAction(sourceUserId, targetUserId);
+                  setAdminLoading(false);
+                  if (res.success) {
+                    setAdminSuccess(`Failsafe merge executed successfully!`);
+                    setSourceUserId("");
+                    setTargetUserId("");
+                    window.location.reload();
+                  } else {
+                    setAdminError(res.error || "Failsafe merge failed");
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Source (Alias/Bad Actor)</label>
+                    <select
+                      value={sourceUserId}
+                      onChange={(e) => setSourceUserId(e.target.value)}
+                      required
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2.5 text-xs text-slate-200 outline-none focus:border-yellow-500 transition-all cursor-pointer"
+                    >
+                      <option value="">-- Select Source --</option>
+                      {allUsers
+                        .filter(u => u.username.toLowerCase().trim() !== "marketmaker")
+                        .map(u => (
+                          <option key={u.id} value={u.id}>{u.username} ({u.balance.toFixed(0)} T)</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Target (Real Profile)</label>
+                    <select
+                      value={targetUserId}
+                      onChange={(e) => setTargetUserId(e.target.value)}
+                      required
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2.5 text-xs text-slate-200 outline-none focus:border-yellow-500 transition-all cursor-pointer"
+                    >
+                      <option value="">-- Select Target --</option>
+                      {allUsers
+                        .filter(u => u.id !== sourceUserId)
+                        .map(u => (
+                          <option key={u.id} value={u.id}>{u.username} ({u.balance.toFixed(0)} T)</option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+
+                {sourceUserId && targetUserId && (
+                  <div className="rounded-lg border border-yellow-500/10 bg-yellow-500/[0.02] p-3 text-[10px] space-y-1.5 font-mono">
+                    <div className="text-slate-300 font-bold uppercase tracking-wider text-[9px]">Failsafe Action Summary</div>
+                    <div className="text-slate-400">
+                      • Merge <span className="text-yellow-500">{allUsers.find(u => u.id === sourceUserId)?.username}</span> into <span className="text-indigo-400">{allUsers.find(u => u.id === targetUserId)?.username}</span>
+                    </div>
+                    <div className="text-slate-400">
+                      • Combined Balances: {(allUsers.find(u => u.id === sourceUserId)!.balance + allUsers.find(u => u.id === targetUserId)!.balance).toFixed(0)} T
+                    </div>
+                    <div className="text-slate-500 leading-normal font-sans">
+                      * Proportional scaling will automatically deduct the source starting faucet (1k) and shrink active bets down to fit target's allowed capital capacity. Source profile will be deleted.
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={adminLoading || !sourceUserId || !targetUserId || sourceUserId === targetUserId}
+                  className="w-full rounded-xl bg-yellow-600 hover:bg-yellow-500 py-3 text-xs font-bold text-white shadow-lg transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {adminLoading ? "Executing Merge..." : "Execute Manual Failsafe Merge"}
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">

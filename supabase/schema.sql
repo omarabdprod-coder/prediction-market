@@ -7,7 +7,8 @@ create table if not exists public.users (
   username text not null,
   avatar_url text,
   balance numeric(12, 2) not null default 1000.00 check (balance >= 0),
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  declared_identity_id uuid references public.users(id) on delete set null
 );
 
 -- Enable RLS for Users
@@ -606,7 +607,8 @@ $$ language plpgsql security definer;
 
 -- Login or Register User RPC (Password-free)
 create or replace function public.login_or_register_user_rpc(
-  p_username text
+  p_username text,
+  p_declared_identity_id uuid default null
 )
 returns uuid as $$
 declare
@@ -621,12 +623,13 @@ begin
   if v_user_id is null then
     v_user_id := uuid_generate_v4();
     
-    insert into public.users (id, username, avatar_url, balance)
+    insert into public.users (id, username, avatar_url, balance, declared_identity_id)
     values (
       v_user_id,
       trim(p_username),
       'https://api.dicebear.com/7.x/adventurer/svg?seed=' || encode(convert_to(trim(p_username), 'UTF8'), 'base64'),
-      1000.00
+      1000.00,
+      p_declared_identity_id
     );
   end if;
 
@@ -643,5 +646,127 @@ begin
   update public.users
   set balance = balance + 1000.00
   where id = p_user_id;
+end;
+$$ language plpgsql security definer;
+
+
+-- Merge Accounts RPC for MarketMaker
+create or replace function public.merge_accounts_rpc(
+  p_source_id uuid,
+  p_target_id uuid
+)
+returns void as $$
+declare
+  v_balance_target numeric(12, 2);
+  v_balance_source numeric(12, 2);
+  v_w_target numeric(12, 2);
+  v_w_source numeric(12, 2);
+  v_c_target numeric(12, 2);
+  v_c_combined numeric(12, 2);
+  v_f numeric;
+  v_pos record;
+  v_target_pos_id uuid;
+  v_shares_target numeric[];
+  v_shares_source numeric[];
+  v_shares_new numeric[];
+  v_i integer;
+begin
+  -- Get balances
+  select balance into v_balance_target from public.users where id = p_target_id;
+  select balance into v_balance_source from public.users where id = p_source_id;
+  
+  if v_balance_target is null or v_balance_source is null then
+    raise exception 'Target or source user not found';
+  end if;
+
+  -- Calculate target active wagers
+  select coalesce(sum(case when type = 'buy' then amount_tokens else -amount_tokens end), 0) into v_w_target
+  from public.transactions
+  where user_id = p_target_id and market_id in (select id from public.markets where status = 'active');
+
+  -- Calculate source active wagers
+  select coalesce(sum(case when type = 'buy' then amount_tokens else -amount_tokens end), 0) into v_w_source
+  from public.transactions
+  where user_id = p_source_id and market_id in (select id from public.markets where status = 'active');
+
+  -- Compute target capacity and combined capital
+  v_c_target := v_balance_target + v_w_target;
+  v_c_combined := v_balance_target + v_balance_source + v_w_target + v_w_source;
+
+  -- Determine scaling factor
+  if v_c_combined > v_c_target and v_c_combined > 0 then
+    v_f := v_c_target / v_c_combined;
+  else
+    v_f := 1.0;
+  end if;
+
+  -- Update target user's balance
+  update public.users
+  set balance = (v_balance_target + v_balance_source) * v_f
+  where id = p_target_id;
+
+  -- Update transactions: scale amount and fee, reassign source user's transactions
+  if v_f < 1.0 then
+    update public.transactions
+    set amount_tokens = amount_tokens * v_f,
+        amount_shares = amount_shares * v_f,
+        fee_tokens = fee_tokens * v_f
+    where user_id = p_target_id;
+  end if;
+
+  update public.transactions
+  set user_id = p_target_id,
+      amount_tokens = amount_tokens * v_f,
+      amount_shares = amount_shares * v_f,
+      fee_tokens = fee_tokens * v_f
+  where user_id = p_source_id;
+
+  -- Reassign/Merge positions
+  for v_pos in
+    select * from public.user_positions where user_id = p_source_id
+  loop
+    -- Scale source shares
+    v_shares_source := array[]::numeric[];
+    for v_i in 1..cardinality(v_pos.shares) loop
+      v_shares_source := array_append(v_shares_source, v_pos.shares[v_i] * v_f);
+    end loop;
+
+    -- Check if target user has a position in the same market
+    select id, shares into v_target_pos_id, v_shares_target
+    from public.user_positions
+    where user_id = p_target_id and market_id = v_pos.market_id;
+
+    if found then
+      -- If target user already has a position, merge them
+      v_shares_new := array[]::numeric[];
+      for v_i in 1..cardinality(v_shares_target) loop
+        -- Scale target shares if v_f < 1.0, and add source shares
+        v_shares_new := array_append(v_shares_new, (v_shares_target[v_i] * v_f) + v_shares_source[v_i]);
+      end loop;
+
+      update public.user_positions
+      set shares = v_shares_new
+      where id = v_target_pos_id;
+
+      -- Delete source position
+      delete from public.user_positions where id = v_pos.id;
+    else
+      -- Reassign source position to target user (already scaled)
+      update public.user_positions
+      set user_id = p_target_id, shares = v_shares_source
+      where id = v_pos.id;
+    end if;
+  end loop;
+
+  -- Scale remaining target positions in markets where source had no position
+  if v_f < 1.0 then
+    update public.user_positions
+    set shares = array(select val * v_f from unnest(shares) as val)
+    where user_id = p_target_id
+      and market_id not in (select market_id from public.user_positions where user_id = p_source_id);
+  end if;
+
+  -- Delete the source user
+  delete from public.users where id = p_source_id;
 end;
 $$ language plpgsql security definer;

@@ -34,6 +34,7 @@ export interface UserProfile {
   balance: number;
   password?: string;
   created_at: string;
+  declared_identity_id?: string | null;
 }
 
 export interface Market {
@@ -107,7 +108,8 @@ class MockDatabase {
         avatar_url: u.avatar,
         balance: u.balance,
         password: u.password,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        declared_identity_id: null
       });
     });
 
@@ -223,7 +225,7 @@ export async function dbRpc<T = any>(
   try {
     switch (fnName) {
       case "login_or_register_user_rpc": {
-        const { p_username } = params;
+        const { p_username, p_declared_identity_id } = params;
         const normalized = p_username.trim();
         let user = Array.from(mockDb.users.values()).find(
           (u) => u.username.toLowerCase() === normalized.toLowerCase()
@@ -236,7 +238,8 @@ export async function dbRpc<T = any>(
             username: normalized,
             avatar_url: `https://api.dicebear.com/7.x/adventurer/svg?seed=${normalized}`,
             balance: 1000.00,
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            declared_identity_id: p_declared_identity_id || null
           };
           mockDb.users.set(newUserId, user);
         }
@@ -249,6 +252,117 @@ export async function dbRpc<T = any>(
         if (user) {
           user.balance += 1000.00;
         }
+        return { data: null, error: null };
+      }
+
+      case "merge_accounts_rpc": {
+        const { p_source_id, p_target_id } = params;
+        const target = mockDb.users.get(p_target_id);
+        const source = mockDb.users.get(p_source_id);
+
+        if (!target || !source) {
+          throw new Error("Target or source user profile not found");
+        }
+
+        // 1. Calculate active wagers
+        const activeMarkets = Array.from(mockDb.markets.values())
+          .filter(m => m.status === "active")
+          .map(m => m.id);
+
+        const calculateActiveWagers = (userId: string) => {
+          return mockDb.transactions
+            .filter(tx => tx.user_id === userId && activeMarkets.includes(tx.market_id))
+            .reduce((sum, tx) => {
+              if (tx.type === "buy") {
+                return sum + tx.amount_tokens;
+              } else if (tx.type === "sell") {
+                return sum - tx.amount_tokens;
+              }
+              return sum;
+            }, 0);
+        };
+
+        const wTarget = calculateActiveWagers(p_target_id);
+        const wSource = calculateActiveWagers(p_source_id);
+
+        // 2. Compute capacity and scaling factor
+        const cTarget = target.balance + wTarget;
+        const cCombined = target.balance + source.balance + wTarget + wSource;
+
+        let f = 1.0;
+        if (cCombined > cTarget && cCombined > 0) {
+          f = cTarget / cCombined;
+        }
+
+        // 3. Update target balance
+        target.balance = (target.balance + source.balance) * f;
+
+        // 4. Update and scale transactions
+        mockDb.transactions.forEach((tx) => {
+          if (tx.user_id === p_target_id) {
+            if (f < 1.0) {
+              tx.amount_tokens *= f;
+              tx.amount_shares *= f;
+              tx.fee_tokens *= f;
+            }
+          } else if (tx.user_id === p_source_id) {
+            tx.user_id = p_target_id;
+            tx.amount_tokens *= f;
+            tx.amount_shares *= f;
+            tx.fee_tokens *= f;
+          }
+        });
+
+        // 5. Merge positions
+        const sourcePositions = Array.from(mockDb.userPositions.values())
+          .filter(pos => pos.user_id === p_source_id);
+
+        sourcePositions.forEach((sPos) => {
+          const market = mockDb.markets.get(sPos.market_id);
+          const outcomesLen = market ? market.outcomes.length : 2;
+
+          // Scale source shares
+          const scaledSourceShares = sPos.shares.map(sh => sh * f);
+
+          const targetKey = `${p_target_id}:${sPos.market_id}`;
+          const tPos = mockDb.userPositions.get(targetKey);
+
+          if (tPos) {
+            // Ensure size compatibility
+            while (tPos.shares.length < outcomesLen) tPos.shares.push(0);
+            
+            // Merge target and source
+            tPos.shares = tPos.shares.map((tSh, idx) => {
+              const sSh = scaledSourceShares[idx] || 0;
+              return (tSh * f) + sSh;
+            });
+          } else {
+            // Reassign and scale
+            sPos.user_id = p_target_id;
+            sPos.shares = scaledSourceShares;
+            mockDb.userPositions.set(targetKey, sPos);
+          }
+          
+          // Delete old key if it was different
+          const sourceKey = `${p_source_id}:${sPos.market_id}`;
+          mockDb.userPositions.delete(sourceKey);
+        });
+
+        // Scale other target positions in markets where source did not have positions
+        if (f < 1.0) {
+          Array.from(mockDb.userPositions.values())
+            .filter(pos => pos.user_id === p_target_id)
+            .forEach((tPos) => {
+              const sourceHasPosition = sourcePositions.some(sp => sp.market_id === tPos.market_id);
+              if (!sourceHasPosition) {
+                tPos.shares = tPos.shares.map(sh => sh * f);
+              }
+            });
+        }
+
+        // 6. Delete source user
+        mockDb.users.delete(p_source_id);
+
         return { data: null, error: null };
       }
 

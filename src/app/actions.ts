@@ -185,7 +185,10 @@ export async function claimPayoutAction(
 /**
  * Unified authentication action (Password-free: logs in if exists, registers if new)
  */
-export async function authenticateAction(username: string): Promise<ActionResponse<string>> {
+export async function authenticateAction(
+  username: string,
+  declaredIdentityId?: string
+): Promise<ActionResponse<string>> {
   try {
     if (!username || username.trim().length === 0) {
       return { success: false, error: "Username is required" };
@@ -196,6 +199,7 @@ export async function authenticateAction(username: string): Promise<ActionRespon
 
     const { data: userId, error } = await dbRpc("login_or_register_user_rpc", {
       p_username: username.trim(),
+      p_declared_identity_id: declaredIdentityId || null,
     });
 
     if (error) {
@@ -245,6 +249,37 @@ export async function claimFaucetAction(userId: string): Promise<ActionResponse<
     if (error) {
       return { success: false, error: error.message || String(error) };
     }
+    revalidatePath("/");
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message || "An unexpected error occurred" };
+  }
+}
+
+/**
+ * Merges a bad actor profile into a target real user profile.
+ */
+export async function mergeAccountsAction(
+  sourceUserId: string,
+  targetUserId: string
+): Promise<ActionResponse<void>> {
+  try {
+    if (!sourceUserId || !targetUserId) {
+      return { success: false, error: "Source and target user IDs are required" };
+    }
+    if (sourceUserId === targetUserId) {
+      return { success: false, error: "Cannot merge an account into itself" };
+    }
+
+    const { error } = await dbRpc("merge_accounts_rpc", {
+      p_source_id: sourceUserId,
+      p_target_id: targetUserId,
+    });
+
+    if (error) {
+      return { success: false, error: error.message || String(error) };
+    }
+
     revalidatePath("/");
     return { success: true };
   } catch (e: any) {

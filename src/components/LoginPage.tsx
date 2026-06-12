@@ -16,6 +16,34 @@ export default function LoginPage({ allUsers = [] }: LoginPageProps) {
   const [isDev, setIsDev] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
 
+  // Stop/Declaration Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [selectedDeclaredId, setSelectedDeclaredId] = useState<string | null>(null);
+
+  const getPredefinedUsersList = () => {
+    const targets = [
+      { key: "marketmaker", defaultName: "MarketMaker", defaultAvatar: "https://api.dicebear.com/7.x/bottts/svg?seed=marketmaker" },
+      { key: "admin", defaultName: "Discord Admin 👑", defaultAvatar: "https://api.dicebear.com/7.x/bottts/svg?seed=admin" },
+      { key: "alice", defaultName: "Alice_Trader 📈", defaultAvatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Alice" },
+      { key: "bob", defaultName: "Bob_HODLer 📉", defaultAvatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Bob" },
+      { key: "charlie", defaultName: "Charlie_Whale 🐳", defaultAvatar: "https://api.dicebear.com/7.x/adventurer/svg?seed=Charlie" },
+    ];
+
+    return targets.map(t => {
+      const found = allUsers.find(u => u.username.toLowerCase().includes(t.key));
+      return {
+        id: found ? found.id : `user-${t.key}`,
+        username: found ? found.username : t.defaultName,
+        avatar_url: found ? found.avatar_url : t.defaultAvatar,
+      };
+    });
+  };
+
+  const isPredefined = (name: string) => {
+    const norm = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return ["marketmaker", "discordadmin", "alicetrader", "bobhodler", "charliewhale", "alice", "bob", "charlie", "admin"].some(key => norm.includes(key));
+  };
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const searchParams = new URLSearchParams(window.location.search);
@@ -50,14 +78,35 @@ export default function LoginPage({ allUsers = [] }: LoginPageProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) return;
+    const trimmed = username.trim();
+    if (!trimmed) return;
+
+    // Stop and verify if not predefined name
+    if (!isPredefined(trimmed)) {
+      setSelectedDeclaredId(null);
+      setShowModal(true);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
-    const res = await authenticateAction(username.trim());
+    const res = await authenticateAction(trimmed);
     setLoading(false);
 
+    if (res.success) {
+      window.location.reload();
+    } else {
+      setError(res.error || "Authentication failed");
+    }
+  };
+
+  const handleConfirmedLogin = async (declaredId: string) => {
+    setShowModal(false);
+    setLoading(true);
+    setError(null);
+    const res = await authenticateAction(username.trim(), declaredId);
+    setLoading(false);
     if (res.success) {
       window.location.reload();
     } else {
@@ -172,6 +221,63 @@ export default function LoginPage({ allUsers = [] }: LoginPageProps) {
           </div>
         )}
       </div>
+
+      {/* Stop & Verify declared identity modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl p-6 sm:p-8 space-y-6 animate-in zoom-in-95 duration-200">
+            <div className="text-center space-y-2">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                <ShieldAlert className="h-6 w-6" />
+              </div>
+              <h2 className="text-lg font-black text-white tracking-tight">Identify Your Profile</h2>
+              <p className="text-xs text-slate-400 leading-relaxed max-w-sm mx-auto">
+                You are signing in with custom name <strong className="text-indigo-400">"{username}"</strong>. To prevent bad actor anonymity, click a box to declare WHO you are:
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 max-h-60 overflow-y-auto pr-1">
+              {getPredefinedUsersList().map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => setSelectedDeclaredId(u.id)}
+                  className={`flex items-center gap-3 rounded-xl border p-3.5 text-left text-xs transition-all cursor-pointer ${
+                    selectedDeclaredId === u.id
+                      ? "border-amber-500 bg-amber-500/10 text-white"
+                      : "border-white/5 bg-slate-950/40 text-slate-400 hover:border-white/10 hover:text-slate-200"
+                  }`}
+                >
+                  <img
+                    src={u.avatar_url}
+                    alt={u.username}
+                    className="h-8 w-8 rounded-full object-cover bg-slate-800 shrink-0"
+                  />
+                  <span className="font-bold truncate">{u.username}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="flex-1 rounded-xl border border-white/10 bg-slate-950 py-3 text-xs font-bold text-slate-400 hover:text-white transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedDeclaredId}
+                onClick={() => selectedDeclaredId && handleConfirmedLogin(selectedDeclaredId)}
+                className="flex-1 glow-btn-purple rounded-xl bg-indigo-600 py-3 text-xs font-bold text-white hover:bg-indigo-500 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+              >
+                Confirm Identity
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
